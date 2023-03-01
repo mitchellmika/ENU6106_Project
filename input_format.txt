@@ -1,0 +1,7 @@
+MC or FD
+Mesh size
+Sim Geoemetry (V for vacuum, W for Water Reflector, M for MOX, U for UO2, I for infinite assemblies)
+Data set (1 or 2)
+Power (MW)
+Number of Histories
+Number of Generations
