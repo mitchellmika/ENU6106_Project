@@ -64,6 +64,7 @@ def main(inputFile):
             geom.extend("W" * int(waterMeshesPerPin/2) )
             geom.extend(mat * fuelMeshesPerPin)
             geom.extend("W" * int(waterMeshesPerPin/2) )
+
     
     # Define fission distribution
     fuelCells = np.where(np.array(geom) != "W")[0]
@@ -78,17 +79,7 @@ def main(inputFile):
     
     xsDict["M"]["F_i"] = F_M
     xsDict["U"]["F_i"] = F_U
-    xsDict["W"]["F_i"] = 0
-
-    # Define interaction cdfs for each material
-    def CDF(mat, eGroup, randSample):
-        if randSample < (xsDict[f"{mat}"]["Sigma_c1"] / xsDict[f"{mat}"]["Sigma_t1"]):
-            return "capture"
-        elif (xsDict[f"{mat}"]["Sigma_c1"] / xsDict[f"{mat}"]["Sigma_t1"]) < randSample < ((xsDict[f"{mat}"]["Sigma_f1"] + xsDict[f"{mat}"]["Sigma_c1"]) / xsDict[f"{mat}"]["Sigma_t1"]):
-            return "fission"
-        elif ((xsDict[f"{mat}"]["Sigma_f1"] + xsDict[f"{mat}"]["Sigma_c1"]) / xsDict[f"{mat}"]["Sigma_t1"]) < randSample < ((xsDict[f"{mat}"]["Sigma_f1"] + xsDict[f"{mat}"]["Sigma_c1"] + xsDict[f"{mat}"][f"Sigma_s{eGroup}{eGroup}"]) / xsDict[f"{mat}"]["Sigma_t1"]):
-            return "In-Scatter"
-        
+    xsDict["W"]["F_i"] = 0        
 
     # Functions for finding left and right bounds given cell index
     cellRightBound = lambda index: (index + 1) * meshSize
@@ -101,12 +92,13 @@ def main(inputFile):
     # Zeros arrays for track length tallying
     trackLengths = {1:np.zeros(len(geom)), 2:np.zeros(len(geom))}
 
-    #FIXME: Instance where neutron crosses multiple cells is broken
+
+    #TODO: Refactor so that main if statement checks cross boundary or not, and then split up the right or left logic at each next step
+    # TODO: Might be slower but will make debugging much easier
     # Begin generation loop
     starts = []
     for i in range(numGenerations):
         # Begin history loop
-        cnt = 0
         for j in range(numHistories):
             # Determine cell start index
             cellIndex = -1
@@ -132,165 +124,122 @@ def main(inputFile):
 
                 travelDistance = (-math.log(squiggly) / xsDict[material][f"Sigma_t{energyGroup}"]) * mu
 
-                # Left boundary crossed (moving right to left)
-                if pos + travelDistance < cellLeftBound(cellIndex):
-                    # Check if problem boundary crossed
-                    if pos + travelDistance < 0 and geometry[0] == "V":
-                        # Particle is lost to vacuum
-                        trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex)
-                        if cellIndex != 0: trackLengths[energyGroup][0:cellIndex] += meshSize
-                        absorbed = True
+                # Update position and cell index (assuming no mat or problem boundary crossed, will check later)
+                newPos = travelDistance + pos
+                newCellIndex = posToIndex(newPos)
 
-                    elif pos + travelDistance < 0 and geometry[0] == "I":
-                        # Particle is reflected
-                        # TODO: Calculate distance that particle "bounces" off the boundary
-                        trackLengths[energyGroup][cellIndex] += abs(travelDistance)
+                ##########################################################################################################################################################
+                # Check for material crosing along the way
+                # If material changes, need to add track lengths and resample travel distance at material boundary
+                #########################################################################################################################################################
+                matChange = False
 
-                    # Particle has not crossed a problem boundary
-                    else:
-                        newPos = pos + travelDistance
-                        newCellIndex = posToIndex(newPos)
+                # For right to left
+                if travelDistance < 0:
+                    edgeCell = 0 if newCellIndex < 0 else newCellIndex # Use to handle cases where particle crosses problem boundary
 
-                        # Check for material crosing along the way
-                        matChange = False
-                        for cell in range(cellIndex,newCellIndex-1, -1): # iterate from travelled distance from right to left before original cell to find where material change occurs
-                            if geom[cell] is not geom[cellIndex]:
-                                newCellIndex = cell
-                                matChange = True
-                                break
-                        
-                        # Material boundary crossed, recalculate distance
-                        # Do not resample direction on next iteration
-                        if matChange:
-                            # Add track lengths, move particle
-                            trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to all cells until material change
-                            trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex) # Add track length to original cell
-                            pos = cellRightBound(newCellIndex) # Move neutron to where material boundary was crossed  (right edge of cell bc moving right to left)
-                            cellIndex = newCellIndex
-                            material = geom[cellIndex] # Update material
-                            resampleDir = False
-                            continue
-
-                        # Cell bound crossed, but no change in material
-                        else:
-                            trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex) # Add track length to original cell
-                            trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to cells along the way
-                            trackLengths[energyGroup][newCellIndex] += cellRightBound(newCellIndex) - newPos # Add track length to new cell location
-
-                            pos = newPos
-                            cellIndex = newCellIndex
-
-                            interactionSample = np.random.random(1)[0]
-                            if interactionSample < xsDict[material][f"Capture_{energyGroup}"]:
-                                # Capture interaction, end history
-                                absorbed = True
-                            elif xsDict[material][f"Capture_{energyGroup}"] <= interactionSample < xsDict[material][f"Fission_{energyGroup}"]:
-                                # Fission interaction, end history
-                                absorbed = True
-                            elif xsDict[material][f"Fission_{energyGroup}"] <= interactionSample < xsDict[material][f"InScatter_{energyGroup}"]:
-                                # In-scattering, no change
-                                pass
-                            else:
-                                # Down-scattering
-                                # Check if up-scattering has occured (not allowed, throw error)
-                                if energyGroup == 2:
-                                    raise RuntimeError("Up-scattering has occured, check calculated cdf")
-                                else:
-                                    energyGroup = 2
-                
-                # Right boundary crossed (moving left to right)
-                elif pos + travelDistance > cellRightBound(cellIndex):
-                    # FIXME: Update checks for problem boundary crossing
-                    # Check if problem boundary crossed
-                    if (pos + travelDistance) > (meshSize * len(geom)) and geometry[3] == "V":
-                        # Particle is lost to vacuum
-                        trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to start cell
-                        if cellIndex != len(geom)-1: trackLengths[energyGroup][cellIndex+1:len(geom)-1] += meshSize # Add track length to other cells if start cell was not at boundary
-                        absorbed = True
-
-                    elif (pos + travelDistance) > (meshSize * len(geom)) and geometry[3] == "I":
-                        # Particle is reflected
-                        # TODO: Reflection distance, need to check boundary crossing again?
-                        trackLengths[energyGroup][cellIndex] += abs(travelDistance)
+                    for cell in range(cellIndex,edgeCell, -1): # iterate from travelled distance from right to left before original cell to find where material change occurs
+                        if geom[cell] is not geom[cellIndex]:
+                            newCellIndex = cell
+                            matChange = True
+                            break
                     
-                    else:
-                        newPos = pos + travelDistance
-                        newCellIndex = posToIndex(newPos)
+                    if matChange:
+                        trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to all cells until material change
+                        trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex) # Add track length to original cell
+                        pos = cellRightBound(newCellIndex) # Move neutron to where material boundary was crossed  (right edge of cell bc moving right to left)
+                        cellIndex = newCellIndex
+                        material = geom[cellIndex] # Update material
+                        resampleDir = False
+                        continue
 
-                        matChange = False
-                        for cell in range(cellIndex,newCellIndex+1): # iterate from travelled distance from right to left before original cell to find where material change occurs
-                            if geom[cell] is not geom[cellIndex]:
-                                newCellIndex = cell
-                                matChange = True
-                                break
-
-                        # Material boundary crossed, recalculate distance  
-                        # Do not resample dir on next iteration   
-                        if matChange:
-                            # Add track lengths, move particle
-                            trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to all cells until material change
-                            trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to original cell
-                            pos = cellLeftBound(newCellIndex) # Move neutron to boundary (left bound bc traveling left to right)
-                            cellIndex = newCellIndex
-                            material = geom[cellIndex] # Update material
-                            resampleDir = False
-                            continue
-
-                        # Cell bound crossed, but no change in material
-                        else:
-                            trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to original cell
-                            trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to cells along the way
-                            trackLengths[energyGroup][newCellIndex] += newPos - cellLeftBound(newCellIndex) # Add track length to new cell location
-
-                            pos = newPos
-                            cellIndex = newCellIndex
-
-                            interactionSample = np.random.random(1)[0]
-                            if interactionSample < xsDict[material][f"Capture_{energyGroup}"]:
-                                # Capture interaction, end history
-                                absorbed = True
-                            elif xsDict[material][f"Capture_{energyGroup}"] <= interactionSample < xsDict[material][f"Fission_{energyGroup}"]:
-                                # Fission interaction, end history
-                                absorbed = True
-                            elif xsDict[material][f"Fission_{energyGroup}"] <= interactionSample < xsDict[material][f"InScatter_{energyGroup}"]:
-                                # In-scattering, no change
-                                pass
-                            else:
-                                # Down-scattering
-                                # Check if up-scattering has occured (not allowed, throw error)
-                                if energyGroup == 2:
-                                    raise RuntimeError("Up-scattering has occured, check calculated cdf")
-                                else:
-                                    energyGroup = 2
-                
-                # No boundary crossed, interaction occurs
-                # Def want to resample dir
+                # For left to right
                 else:
-                    pos += travelDistance
-                    trackLengths[energyGroup][cellIndex] += abs(travelDistance)
-                    cellIndex = posToIndex(pos)
+                    edgeCell = len(geom)-1 if newCellIndex > len(geom)-1 else newCellIndex # Use to handle cases where particle crosses problem boundary
 
-                    interactionSample = np.random.random(1)[0]
-                    if interactionSample < xsDict[material][f"Capture_{energyGroup}"]:
-                        # Capture interaction, end history
-                        absorbed = True
-                    elif xsDict[material][f"Capture_{energyGroup}"] <= interactionSample < xsDict[material][f"Fission_{energyGroup}"]:
-                        # Fission interaction, end history
-                        absorbed = True
-                    elif xsDict[material][f"Fission_{energyGroup}"] <= interactionSample < xsDict[material][f"InScatter_{energyGroup}"]:
-                        # In-scattering, no change
-                        pass
-                    else:
-                        # Down-scattering
-                        # Check if up-scattering has occured (not allowed, throw error)
-                        if energyGroup == 2:
-                            raise RuntimeError("Up-scattering has occured, check calculated cdf")
-                        else:
-                            energyGroup = 2
+                    for cell in range(cellIndex,edgeCell+1): # iterate from travelled distance from right to left before original cell to find where material change occurs
+                        if geom[cell] is not geom[cellIndex]:
+                            newCellIndex = cell
+                            matChange = True
+                            break
+                    
+                    if matChange:
+                        trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to all cells until material change
+                        trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to original cell
+                        pos = cellLeftBound(newCellIndex) # Move neutron to boundary (left bound bc traveling left to right)
+                        cellIndex = newCellIndex
+                        material = geom[cellIndex] # Update material
+                        resampleDir = False
+                        continue
+                    
+                #######################################################################################################################################################
+                # Check for problem boundaries
+                #######################################################################################################################################################
+                if newPos < 0 and geometry[0] == "V":
+                    # Particle is lost to vacuum on left side
+                    trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex)
+                    if cellIndex != 0: 
+                        trackLengths[energyGroup][0:cellIndex] += meshSize
+                    absorbed = True
+                    continue
+
+                elif newPos < 0 and geometry[0] == "I":
+                    # Particle is reflected on left side
+                    # TODO: Calculate distance that particle "bounces" off the boundary
+                    trackLengths[energyGroup][cellIndex] += abs(travelDistance)
+
+                elif newPos > (meshSize * len(geom)) and geometry[3] == "V":
+                    # Particle is lost to vacuum on right side
+                    trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to start cell
+                    if cellIndex != len(geom)-1: 
+                        trackLengths[energyGroup][cellIndex+1:len(geom)-1] += meshSize # Add track length to other cells if start cell was not at boundary
+                    absorbed = True
+                    continue
+
+                elif newPos > (meshSize * len(geom)) and geometry[3] == "I":
+                    # Particle is reflected on right side
+                    # TODO: Reflection distance, need to check boundary crossing again?
+                    trackLengths[energyGroup][cellIndex] += abs(travelDistance)
                 
-                # print(f"Neutron {cnt} in cell {cellIndex} / {len(geom)}, at position {pos:.7f} / {meshSize * len(geom):.7f}")
+                ##################################################################################################################################################
+                # No material changes, no problem boundaries crossed
+                # Compute tally lengths and sample interaction
+                #################################################################################################################################################
+
+                if newCellIndex != cellIndex and travelDistance < 0:
+                    trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex) # Add track length to original cell
+                    trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to cells along the way
+                    trackLengths[energyGroup][newCellIndex] += cellRightBound(newCellIndex) - newPos # Add track length to new cell location
+                elif newCellIndex != cellIndex and travelDistance > 0:
+                    trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to original cell
+                    trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to cells along the way
+                    trackLengths[energyGroup][newCellIndex] += newPos - cellLeftBound(newCellIndex) # Add track length to new cell location
+                else:
+                    trackLengths[energyGroup][cellIndex] += abs(travelDistance)
+
+                pos = newPos
+                cellIndex = newCellIndex
+
+                interactionSample = np.random.random(1)[0]
+                if interactionSample < xsDict[material][f"Capture_{energyGroup}"]:
+                    # Capture interaction, end history
+                    absorbed = True
+                elif xsDict[material][f"Capture_{energyGroup}"] <= interactionSample < xsDict[material][f"Fission_{energyGroup}"]:
+                    # Fission interaction, end history
+                    absorbed = True
+                elif xsDict[material][f"Fission_{energyGroup}"] <= interactionSample < xsDict[material][f"InScatter_{energyGroup}"]:
+                    # In-scattering, no change
+                    pass
+                else:
+                    # Down-scattering
+                    # Check if up-scattering has occured (not allowed, throw error)
+                    if energyGroup == 2:
+                        raise RuntimeError("Up-scattering has occured, check calculated cdf")
+                    else:
+                        energyGroup = 2
+                
+                # print(f"Neutron {j} in cell {cellIndex} / {len(geom)}, at position {pos:.7f} / {meshSize * len(geom):.7f}")
                 resampleDir = True
-            cnt += 1
                     
     fuelBounds = []
     for i in range(len(geom)-1):
