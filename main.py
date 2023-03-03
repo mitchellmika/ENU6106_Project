@@ -84,13 +84,22 @@ def main(inputFile):
     numUCells = len(UCells)
     numMCells = len(MCells)
 
-    normalizingFactor = numUCells * xsDict["U"]["Sigma_f2"] + numMCells * xsDict["M"]["Sigma_f2"]
-    F_U = xsDict["U"]["Sigma_f2"] / normalizingFactor
-    F_M = xsDict["M"]["Sigma_f2"] / normalizingFactor
+    normalizingFactor = (numUCells * (xsDict["U"]["Sigma_f2"]* xsDict["U"]["Nu_f2"] + xsDict["U"]["Sigma_f1"]* xsDict["U"]["Nu_f1"])) + (numMCells * (xsDict["M"]["Sigma_f2"]* xsDict["M"]["Nu_f2"] + xsDict["M"]["Sigma_f1"]* xsDict["M"]["Nu_f1"]))
+    F_U = (xsDict["U"]["Sigma_f2"]* xsDict["U"]["Nu_f2"] + xsDict["U"]["Sigma_f1"]* xsDict["U"]["Nu_f1"]) / normalizingFactor
+    F_M = (xsDict["M"]["Sigma_f2"]* xsDict["M"]["Nu_f2"] + xsDict["M"]["Sigma_f1"]* xsDict["M"]["Nu_f1"]) / normalizingFactor
     
     xsDict["M"]["F_i"] = F_M
     xsDict["U"]["F_i"] = F_U
-    xsDict["W"]["F_i"] = 0        
+    xsDict["W"]["F_i"] = 0
+
+    F = np.empty(len(geom))
+    for i in range(len(geom)):
+        if geom[i] == "W":
+            F[i] = 0
+        elif geom[i] == "U":
+            F[i] = F_U
+        elif geom[i] == "M":
+            F[i] = F_M
 
     # Functions for finding left and right bounds given cell index
     cellRightBound = lambda index: (index + 1) * meshSize
@@ -103,12 +112,16 @@ def main(inputFile):
     # Zeros arrays for track length tallying
     trackLengths = {1:np.zeros(len(geom)), 2:np.zeros(len(geom))}
     currents = {1:np.zeros(len(geom)+1), 2:np.zeros(len(geom)+1)}
+    currents = {1:np.zeros(len(geom)+1), 2:np.zeros(len(geom)+1)}
 
     # Begin generation loop
     # TODO: Current tracking for infinite lattice condition
     starts = []
     leftDir = []
     rightDir =[]
+    k = 1.0
+
+    # FIXME: Current at right edge is not dropping to zero. Maybe indexing error?
     for i in range(numGenerations):
         # Begin history loop
         for j in range(numHistories):
@@ -116,7 +129,7 @@ def main(inputFile):
             cellIndex = -1
             startCellRandNum = np.random.random(1)[0]
             for cell in fuelCells:
-                startCellRandNum -= xsDict[geom[cell]]["F_i"]
+                startCellRandNum -= F[cell]
                 if startCellRandNum < 0:
                     cellIndex = cell
                     starts.append(cellIndex)
@@ -329,12 +342,32 @@ def main(inputFile):
                 
                 resampleDir = True
                 resampleDist = True
+        
+        pass # This is where history loop ends
+        flux1 = trackLengths[1] / (k * meshSize * numHistories)
+        flux2 = trackLengths[2] / (k * meshSize * numHistories)
+        
+        # Recalculate fission source for next generation
+        for l in range(len(geom)):
+            if geom[l] == "W":
+                F[l] = 0
+            elif geom[l] == "U":
+                F[l] = (xsDict["U"]["Nu_f1"] * xsDict["U"]["Sigma_f1"] * flux1[l]) + (xsDict["U"]["Nu_f2"] * xsDict["U"]["Sigma_f2"] * flux2[l])
+            elif geom[l] == "M":
+                F[l] = (xsDict["M"]["Nu_f1"] * xsDict["M"]["Sigma_f1"] * flux1[l]) + (xsDict["M"]["Nu_f2"] * xsDict["M"]["Sigma_f2"] * flux2[l])
+
+        k *= (meshSize * np.sum(F))
+
+        normalizingFactor = np.sum(F)
+        F /= normalizingFactor
+
+        print(k)
     
     # Calculate currents in centers of mesh
     centerCurrents = {1:np.empty(len(currents[1])-1), 2:np.empty(len(currents[1])-1)}
     for j in range(len(centerCurrents[1])):
-        centerCurrents[1][j] = ((2*currents[1][j] + 2*currents[1][j+1]) / (numHistories * meshSize))
-        centerCurrents[2][j] = ((2*currents[2][j] + 2*currents[2][j+1]) / (numHistories * meshSize))
+        centerCurrents[1][j] = ((currents[1][j] + currents[1][j+1]) / (numHistories * meshSize))
+        centerCurrents[2][j] = ((currents[2][j] + currents[2][j+1]) / (numHistories * meshSize))
 
     # Find fuel bounds for plotting
     fuelBounds = []
@@ -347,8 +380,8 @@ def main(inputFile):
     # print(np.mean(np.array(leftDir)))
     # print(np.mean(np.array(rightDir)))
 
-    flux1 = trackLengths[1] / (meshSize * numHistories)
-    flux2 = trackLengths[2] / (meshSize * numHistories)
+    flux1 = trackLengths[1] / (meshSize * numHistories * numGenerations)
+    flux2 = trackLengths[2] / (meshSize * numHistories * numGenerations)
 
     plt.figure(figsize=(23,12)) 
     plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(flux1)), color="g", alpha=0.3) # Fuel boundaries
