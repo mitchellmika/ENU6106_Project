@@ -93,10 +93,12 @@ def main(inputFile):
     trackLengths = {1:np.zeros(len(geom)), 2:np.zeros(len(geom))}
 
 
-    #TODO: Refactor so that main if statement checks cross boundary or not, and then split up the right or left logic at each next step
-    # TODO: Might be slower but will make debugging much easier
+    # FIXME: Particle never travels to the right. Also maybe traveling too far? Not sure what ratio to expect for leakage vs vaccuum
     # Begin generation loop
+    posTrackers = []
     starts = []
+    leftDir = []
+    rightDir =[]
     for i in range(numGenerations):
         # Begin history loop
         for j in range(numHistories):
@@ -116,13 +118,23 @@ def main(inputFile):
 
             absorbed = False
             resampleDir = True
+            resampleDist = True
             while not absorbed:
+                #print(f"Neutron {j} in cell {cellIndex} / {len(geom)}, at position {pos:.7f} / {meshSize * len(geom):.7f}")
+
                 material = geom[cellIndex]
+
+                # Left dir magnitude still seems much bigger, almost double
+                squiggly = np.random.random(1)[0]
                 if resampleDir:
-                    squiggly = np.random.random(1)[0]
                     mu = 2*squiggly - 1
 
-                travelDistance = (-math.log(squiggly) / xsDict[material][f"Sigma_t{energyGroup}"]) * mu
+                if resampleDist:
+                    travelDistance = (-math.log(squiggly) / xsDict[material][f"Sigma_t{energyGroup}"]) * mu
+                if travelDistance < 0:
+                    leftDir.append(travelDistance)
+                else:
+                    rightDir.append(travelDistance)
 
                 # Update position and cell index (assuming no mat or problem boundary crossed, will check later)
                 newPos = travelDistance + pos
@@ -132,52 +144,50 @@ def main(inputFile):
                 # Check for material crosing along the way
                 # If material changes, need to add track lengths and resample travel distance at material boundary
                 #########################################################################################################################################################
-                matChange = False
-
                 # For right to left
                 if travelDistance < 0:
+                    matChange = False
                     edgeCell = 0 if newCellIndex < 0 else newCellIndex # Use to handle cases where particle crosses problem boundary
 
                     for cell in range(cellIndex,edgeCell, -1): # iterate from travelled distance from right to left before original cell to find where material change occurs
-                        if geom[cell] is not geom[cellIndex]:
+                        if geom[cell] is not geom[cellIndex]: # Enter if material change found along path
                             newCellIndex = cell
-                            matChange = True
+                            trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to all cells until material change
+                            trackLengths[energyGroup][cellIndex] += (pos - cellLeftBound(cellIndex)) # Add track length to original cell
+                            pos = cellRightBound(newCellIndex) # Move neutron to where material boundary was crossed  (right edge of cell bc moving right to left)
+                            cellIndex = newCellIndex
+                            resampleDir = False
+                            matChange=True
                             break
-                    
+                        
                     if matChange:
-                        trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to all cells until material change
-                        trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex) # Add track length to original cell
-                        pos = cellRightBound(newCellIndex) # Move neutron to where material boundary was crossed  (right edge of cell bc moving right to left)
-                        cellIndex = newCellIndex
-                        material = geom[cellIndex] # Update material
-                        resampleDir = False
                         continue
 
                 # For left to right
                 else:
+                    matChange = False
                     edgeCell = len(geom)-1 if newCellIndex > len(geom)-1 else newCellIndex # Use to handle cases where particle crosses problem boundary
 
                     for cell in range(cellIndex,edgeCell+1): # iterate from travelled distance from right to left before original cell to find where material change occurs
-                        if geom[cell] is not geom[cellIndex]:
+                        if geom[cell] is not geom[cellIndex]: # Enter if material change found along path
                             newCellIndex = cell
-                            matChange = True
+                            trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to all cells until material change
+                            trackLengths[energyGroup][cellIndex] += (cellRightBound(cellIndex) - pos) # Add track length to original cell
+                            pos = cellLeftBound(newCellIndex) # Move neutron to boundary (left bound bc traveling left to right)
+                            cellIndex = newCellIndex
+                            resampleDir = False
+                            matChange=True
                             break
-                    
+
                     if matChange:
-                        trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to all cells until material change
-                        trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to original cell
-                        pos = cellLeftBound(newCellIndex) # Move neutron to boundary (left bound bc traveling left to right)
-                        cellIndex = newCellIndex
-                        material = geom[cellIndex] # Update material
-                        resampleDir = False
                         continue
                     
                 #######################################################################################################################################################
-                # Check for problem boundaries
+                # Check for problem boundary crossing
                 #######################################################################################################################################################
                 if newPos < 0 and geometry[0] == "V":
                     # Particle is lost to vacuum on left side
-                    trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex)
+                    trackLengths[energyGroup][cellIndex] += (pos - cellLeftBound(cellIndex))
                     if cellIndex != 0: 
                         trackLengths[energyGroup][0:cellIndex] += meshSize
                     absorbed = True
@@ -190,7 +200,7 @@ def main(inputFile):
 
                 elif newPos > (meshSize * len(geom)) and geometry[3] == "V":
                     # Particle is lost to vacuum on right side
-                    trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to start cell
+                    trackLengths[energyGroup][cellIndex] += (cellRightBound(cellIndex) - pos) # Add track length to start cell
                     if cellIndex != len(geom)-1: 
                         trackLengths[energyGroup][cellIndex+1:len(geom)-1] += meshSize # Add track length to other cells if start cell was not at boundary
                     absorbed = True
@@ -207,13 +217,13 @@ def main(inputFile):
                 #################################################################################################################################################
 
                 if newCellIndex != cellIndex and travelDistance < 0:
-                    trackLengths[energyGroup][cellIndex] += pos - cellLeftBound(cellIndex) # Add track length to original cell
+                    trackLengths[energyGroup][cellIndex] += (pos - cellLeftBound(cellIndex)) # Add track length to original cell
                     trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to cells along the way
-                    trackLengths[energyGroup][newCellIndex] += cellRightBound(newCellIndex) - newPos # Add track length to new cell location
+                    trackLengths[energyGroup][newCellIndex] += (cellRightBound(newCellIndex) - newPos) # Add track length to new cell location
                 elif newCellIndex != cellIndex and travelDistance > 0:
-                    trackLengths[energyGroup][cellIndex] += cellRightBound(cellIndex) - pos # Add track length to original cell
+                    trackLengths[energyGroup][cellIndex] += (cellRightBound(cellIndex) - pos) # Add track length to original cell
                     trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to cells along the way
-                    trackLengths[energyGroup][newCellIndex] += newPos - cellLeftBound(newCellIndex) # Add track length to new cell location
+                    trackLengths[energyGroup][newCellIndex] += (newPos - cellLeftBound(newCellIndex)) # Add track length to new cell location
                 else:
                     trackLengths[energyGroup][cellIndex] += abs(travelDistance)
 
@@ -238,8 +248,8 @@ def main(inputFile):
                     else:
                         energyGroup = 2
                 
-                # print(f"Neutron {j} in cell {cellIndex} / {len(geom)}, at position {pos:.7f} / {meshSize * len(geom):.7f}")
                 resampleDir = True
+                resampleDist = True
                     
     fuelBounds = []
     for i in range(len(geom)-1):
@@ -248,12 +258,20 @@ def main(inputFile):
         elif (geom[i+1] == "U" or geom[i+1] == "M") and geom[i] == "W":
             fuelBounds.append(i+1)
 
-    plt.figure(figsize=(23,13)) 
-    plt.errorbar(x=fuelBounds, y=np.ones(len(fuelBounds))*np.mean(trackLengths[1]), linestyle='', yerr=(np.mean(trackLengths[1])), color="g", alpha=0.3) # Fuel boundaries
-    plt.errorbar(x=[0,len(geom)-1], y=np.ones(2)*np.mean(trackLengths[1]), linestyle='', yerr=(np.mean(trackLengths[1])), color="k", alpha=0.4)
-    plt.plot(range(len(geom)), trackLengths[1], label="Track Lengths")
-    plt.scatter(starts, np.zeros(len(starts)), c="r", s=0.5, label="Start Positions")
+    print(np.mean(np.array(leftDir)))
+    print(np.mean(np.array(rightDir)))
+
+    flux1 = trackLengths[1] / (meshSize * numHistories)
+    flux2 = trackLengths[2] / (meshSize * numHistories)
+
+    plt.figure(figsize=(23,12)) 
+    plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(flux1)), color="g", alpha=0.3) # Fuel boundaries
+    plt.errorbar(x=[0,len(geom)-1], y=np.zeros(2)*np.max(flux1), linestyle='', yerr=(np.max(flux1)), color="k", alpha=0.4)
+    plt.plot(range(len(geom)), flux1, label="Group 1 Flux")
+    plt.plot(range(len(geom)), flux2, label="Group 2 Flux")
+    plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
     plt.legend()
+    plt.ylim(0, np.max(flux1))
     plt.show()
 
 
