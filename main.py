@@ -84,9 +84,9 @@ def main(inputFile):
     numUCells = len(UCells)
     numMCells = len(MCells)
 
-    normalizingFactor = (numUCells * (xsDict["U"]["Sigma_f2"]* xsDict["U"]["Nu_f2"] + xsDict["U"]["Sigma_f1"]* xsDict["U"]["Nu_f1"])) + (numMCells * (xsDict["M"]["Sigma_f2"]* xsDict["M"]["Nu_f2"] + xsDict["M"]["Sigma_f1"]* xsDict["M"]["Nu_f1"]))
-    F_U = (xsDict["U"]["Sigma_f2"]* xsDict["U"]["Nu_f2"] + xsDict["U"]["Sigma_f1"]* xsDict["U"]["Nu_f1"]) / normalizingFactor
-    F_M = (xsDict["M"]["Sigma_f2"]* xsDict["M"]["Nu_f2"] + xsDict["M"]["Sigma_f1"]* xsDict["M"]["Nu_f1"]) / normalizingFactor
+    normalizingFactor = (numUCells * ( (xsDict["U"]["Sigma_f1"] +  xsDict["U"]["Sigma_f2"]) * xsDict["U"]["Nu_f2"])) + (numMCells * ((xsDict["M"]["Sigma_f1"] + xsDict["M"]["Sigma_f2"]) * xsDict["M"]["Nu_f2"]))
+    F_U =  ((xsDict["U"]["Sigma_f1"] +  xsDict["U"]["Sigma_f2"]) * xsDict["U"]["Nu_f2"]) / normalizingFactor
+    F_M = ((xsDict["U"]["Sigma_f1"] +  xsDict["U"]["Sigma_f2"]) * xsDict["M"]["Nu_f2"]) / normalizingFactor
     
     xsDict["M"]["F_i"] = F_M
     xsDict["U"]["F_i"] = F_U
@@ -147,10 +147,10 @@ def main(inputFile):
 
                 material = geom[cellIndex]
 
-                # FIXME: Left dir magnitude still seems much bigger, almost double
                 squiggly = np.random.random(1)[0]
                 if resampleDir:
-                    mu = 2*squiggly - 1
+                    randDir = np.random.random(1)[0]
+                    mu = 2*randDir - 1
 
                 if resampleDist:
                     travelDistance = (-math.log(squiggly) / xsDict[material][f"Sigma_t{energyGroup}"]) * mu
@@ -231,12 +231,12 @@ def main(inputFile):
                     trackLengths[energyGroup][cellIndex] += (pos - cellLeftBound(cellIndex))
                     if cellIndex != 0: 
                         trackLengths[energyGroup][0:cellIndex] += meshSize
-                    absorbed = True
 
                     # Update currents
                     firstEdge = cellIndex
                     lastEdge = newCellIndex + 1
                     currents[energyGroup][lastEdge:firstEdge+1] += mu
+                    absorbed = True
                     continue
 
                 elif newPos < 0 and geometry[0] == "I":
@@ -346,20 +346,19 @@ def main(inputFile):
         pass # This is where history loop ends
         flux1 = trackLengths[1] / (k * meshSize * numHistories)
         flux2 = trackLengths[2] / (k * meshSize * numHistories)
+
+        F_i = np.empty(len(geom))
         
         # Recalculate fission source for next generation
         for l in range(len(geom)):
             if geom[l] == "W":
-                F[l] = 0
+                F_i[l] = 0
             elif geom[l] == "U":
-                F[l] = (xsDict["U"]["Nu_f1"] * xsDict["U"]["Sigma_f1"] * flux1[l]) + (xsDict["U"]["Nu_f2"] * xsDict["U"]["Sigma_f2"] * flux2[l])
+                F_i[l] = (xsDict["U"]["Nu_f2"] * xsDict["U"]["Sigma_f2"]) * flux2[l]
             elif geom[l] == "M":
-                F[l] = (xsDict["M"]["Nu_f1"] * xsDict["M"]["Sigma_f1"] * flux1[l]) + (xsDict["M"]["Nu_f2"] * xsDict["M"]["Sigma_f2"] * flux2[l])
+                F_i[l] = (xsDict["M"]["Nu_f2"] * xsDict["M"]["Sigma_f2"]) * flux2[l]
 
-        k *= (meshSize * np.sum(F))
-
-        normalizingFactor = np.sum(F)
-        F /= normalizingFactor
+        k *= (meshSize * np.sum(F_i))
 
         print(k)
     
