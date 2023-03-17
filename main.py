@@ -2,29 +2,21 @@ import csv
 import numpy as np
 import matplotlib.pyplot as plt
 import math
-
-def AddCurrent(currents, energyGroup, startCell, endCell):
-    # Left to right motion
-    if startCell < endCell:
-        firstEdge = startCell + 1
-        lastEdge = endCell
-
-        currents[energyGroup][firstEdge:lastEdge+1] += mu
-    # Right to left motion
-    else:
-        pass
+import time
 
 def main(inputFile):
     # Read input file
     with open(inputFile, mode="r") as file:
         readlines = file.readlines()
         method = readlines[0]
-        meshSize = float(readlines[1])
-        geometry = readlines[2]
-        dataSet = int(readlines[3])
-        power = float(readlines[4])
-        numHistories = int(readlines[5])
-        numGenerations = int(readlines[6])
+        fuelMeshesPerPin = int(readlines[1])
+        waterMeshesPerPin = int(readlines[2])
+        geometry = readlines[3].replace("\n","")
+        dataSet = int(readlines[4])
+        power = float(readlines[5])
+        numHistories = int(readlines[6])
+        numGenerations = int(readlines[7])
+        skipGenerations = int(readlines[8])
 
     # Input checks
     # TODO: Check if mesh size fits, try to bump to closest value that does fit
@@ -62,20 +54,28 @@ def main(inputFile):
             }
     
     # Define geometry
+    if waterMeshesPerPin % 2 != 0:
+        raise RuntimeError("Num water meshes must be divisible by 2 in order to accomodate half pin")
     D_fuel = 1.1058
     P = 1.4385
-    L_assem = 24.4545
     D_water = P - D_fuel
-    waterMeshesPerPin = int(D_water / meshSize)
-    fuelMeshesPerPin = int(D_fuel/meshSize)
+    meshSize = {"W": (D_water / waterMeshesPerPin), "M":(D_fuel / fuelMeshesPerPin), "U":(D_fuel / fuelMeshesPerPin)}
 
     geom = []
-    for mat in geometry[1:3]:
+    for mat in geometry[1:-1]:
         for i in range(17):
-            geom.extend("W" * int(waterMeshesPerPin/2) )
-            geom.extend(mat * fuelMeshesPerPin)
-            geom.extend("W" * int(waterMeshesPerPin/2) )
+            if mat == "W":
+                geom.extend("W" * waterMeshesPerPin)
+            else:
+                geom.extend("W" * int(waterMeshesPerPin/2) )
+                geom.extend(mat * fuelMeshesPerPin)
+                geom.extend("W" * int(waterMeshesPerPin/2) )
 
+    rightBounds = [meshSize[geom[0]]]
+    leftBounds = [0]
+    for i in range(len(geom)-1):
+        leftBounds.append(rightBounds[i])
+        rightBounds.append(rightBounds[i] + meshSize[geom[i+1]])
     
     # Define fission distribution
     fuelCells = np.where(np.array(geom) != "W")[0]
@@ -84,9 +84,9 @@ def main(inputFile):
     numUCells = len(UCells)
     numMCells = len(MCells)
 
-    normalizingFactor = (numUCells * ( (xsDict["U"]["Sigma_f1"] +  xsDict["U"]["Sigma_f2"]) * xsDict["U"]["Nu_f2"])) + (numMCells * ((xsDict["M"]["Sigma_f1"] + xsDict["M"]["Sigma_f2"]) * xsDict["M"]["Nu_f2"]))
-    F_U =  ((xsDict["U"]["Sigma_f1"] +  xsDict["U"]["Sigma_f2"]) * xsDict["U"]["Nu_f2"]) / normalizingFactor
-    F_M = ((xsDict["U"]["Sigma_f1"] +  xsDict["U"]["Sigma_f2"]) * xsDict["M"]["Nu_f2"]) / normalizingFactor
+    normalizingFactor = (numUCells * ( (xsDict["U"]["Sigma_f1"] * xsDict["U"]["Nu_f1"]) +  (xsDict["U"]["Sigma_f2"] * xsDict["U"]["Nu_f2"]))) + (numMCells * ((xsDict["M"]["Sigma_f1"] * xsDict["M"]["Nu_f1"]) + (xsDict["M"]["Sigma_f2"] * xsDict["M"]["Nu_f2"])))
+    F_U =  ( (xsDict["U"]["Sigma_f1"] * xsDict["U"]["Nu_f1"]) +  (xsDict["U"]["Sigma_f2"] * xsDict["U"]["Nu_f2"])) / normalizingFactor
+    F_M = ((xsDict["M"]["Sigma_f1"] * xsDict["M"]["Nu_f1"]) + (xsDict["M"]["Sigma_f2"] * xsDict["M"]["Nu_f2"])) / normalizingFactor
     
     xsDict["M"]["F_i"] = F_M
     xsDict["U"]["F_i"] = F_U
@@ -100,52 +100,70 @@ def main(inputFile):
             F[i] = F_U
         elif geom[i] == "M":
             F[i] = F_M
+    
+    if abs(np.sum(F) - 1.0) > 0.0001:
+        raise RuntimeError("Fission start source should never be less than one")
+
+    L_assem = 17 * (waterMeshesPerPin * meshSize["W"] + fuelMeshesPerPin * meshSize["M"])
+    L_geom = rightBounds[-1]
 
     # Functions for finding left and right bounds given cell index
-    cellRightBound = lambda index: (index + 1) * meshSize
-    cellLeftBound = lambda index: index * meshSize
-    cellCenter = lambda index: (index + 0.5) * meshSize
+    cellRightBound = lambda index: rightBounds[index]
+    cellLeftBound = lambda index: leftBounds[index]
+    cellCenter = lambda index: (leftBounds[index] + rightBounds[index]) / 2.0
 
     # Function for find index based on position
-    posToIndex = lambda pos: int(pos / meshSize)
+    def posToIndex(pos):
+        if pos < cellLeftBound(0):
+            return -1
+        elif pos > cellRightBound(-1):
+            return len(geom)
+        for ind in range(len(geom)):
+            if cellLeftBound(ind) < pos < cellRightBound(ind):
+                return ind
 
     # Zeros arrays for track length tallying
-    trackLengths = {1:np.zeros(len(geom)), 2:np.zeros(len(geom))}
-    currents = {1:np.zeros(len(geom)+1), 2:np.zeros(len(geom)+1)}
-    currents = {1:np.zeros(len(geom)+1), 2:np.zeros(len(geom)+1)}
+    trackLengths = {1:np.zeros( (numGenerations,len(geom) )), 2:np.zeros((numGenerations,len(geom)))}
+    currents = {1:np.zeros((numGenerations,len(geom)+1)), 2:np.zeros((numGenerations,len(geom)+1))}
+    centerCurrents = {1:np.zeros((numGenerations,len(geom))), 2:np.zeros((numGenerations,len(geom)))}
+
+    flux1 = np.zeros( (numGenerations,len(geom) ))
+    flux2 = np.zeros( (numGenerations,len(geom) ))
 
     # Begin generation loop
     # TODO: Current tracking for infinite lattice condition
     starts = []
     leftDir = []
     rightDir =[]
-    k = 1.0
+    k = np.ones(numGenerations+1)
 
-    # FIXME: Current at right edge is not dropping to zero. Maybe indexing error?
+    #TODO: Implement power
+    startTime = time.time()
     for i in range(numGenerations):
+        print(f"Generation {i}: k={k[i]:.4f}")
         # Begin history loop
         for j in range(numHistories):
             # Determine cell start index
-            cellIndex = -1
+            cellIndex = None
             startCellRandNum = np.random.random(1)[0]
             for cell in fuelCells:
                 startCellRandNum -= F[cell]
                 if startCellRandNum < 0:
                     cellIndex = cell
-                    starts.append(cellIndex)
+                    
                     break
             
             # Determine start position
             pos = np.random.uniform(cellLeftBound(cellIndex), cellRightBound(cellIndex))
+            starts.append(pos)
             energyGroup = 1
 
             absorbed = False
             resampleDir = True
             resampleDist = True
             while not absorbed:
-                #print(f"Neutron {j} in cell {cellIndex} / {len(geom)}, at position {pos:.7f} / {meshSize * len(geom):.7f}")
-
                 material = geom[cellIndex]
+                
 
                 squiggly = np.random.random(1)[0]
                 if resampleDir:
@@ -154,10 +172,6 @@ def main(inputFile):
 
                 if resampleDist:
                     travelDistance = (-math.log(squiggly) / xsDict[material][f"Sigma_t{energyGroup}"]) * mu
-                if travelDistance < 0:
-                    leftDir.append(travelDistance)
-                else:
-                    rightDir.append(travelDistance)
 
                 # Update position and cell index (assuming no mat or problem boundary crossed, will check later)
                 newPos = travelDistance + pos
@@ -167,6 +181,7 @@ def main(inputFile):
                 # Check for material crosing along the way
                 # If material changes, need to add track lengths and resample travel distance at material boundary
                 #########################################################################################################################################################
+                # TODO: Check if I am missing out on adding the current to where the material boundary is
                 # For right to left
                 if travelDistance < 0:
                     matChange = False
@@ -177,14 +192,14 @@ def main(inputFile):
                             newCellIndex = cell
 
                             # Update track lengths
-                            trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to all cells until material change
-                            trackLengths[energyGroup][cellIndex] += (pos - cellLeftBound(cellIndex)) # Add track length to original cell
+                            trackLengths[energyGroup][i][newCellIndex+1:cellIndex] += (meshSize[material]/abs(mu)) # Add track length to all cells until material change
+                            trackLengths[energyGroup][i][cellIndex] += ((pos - cellLeftBound(cellIndex))/abs(mu)) # Add track length to original cell
                             pos = cellRightBound(newCellIndex) # Move neutron to where material boundary was crossed  (right edge of cell bc moving right to left)
 
                             # Update currents
                             firstEdge = cellIndex
-                            lastEdge = newCellIndex + 1
-                            currents[energyGroup][lastEdge:firstEdge+1] += mu
+                            lastEdge = newCellIndex +1
+                            currents[energyGroup][i][lastEdge:firstEdge+1] += mu
 
                             cellIndex = newCellIndex
                             resampleDir = False
@@ -205,14 +220,14 @@ def main(inputFile):
                             newCellIndex = cell
 
                             # Update track lengths
-                            trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to all cells until material change
-                            trackLengths[energyGroup][cellIndex] += (cellRightBound(cellIndex) - pos) # Add track length to original cell
+                            trackLengths[energyGroup][i][cellIndex+1:newCellIndex] += (meshSize[material]/abs(mu)) # Add track length to all cells until material change
+                            trackLengths[energyGroup][i][cellIndex] += ((cellRightBound(cellIndex) - pos)/abs(mu)) # Add track length to original cell
                             pos = cellLeftBound(newCellIndex) # Move neutron to boundary (left bound bc traveling left to right)
 
                             # Update currents
                             firstEdge = cellIndex + 1
                             lastEdge = newCellIndex
-                            currents[energyGroup][firstEdge:lastEdge+1] += mu
+                            currents[energyGroup][i][firstEdge:lastEdge+1] += mu
 
                             cellIndex = newCellIndex
                             resampleDir = False
@@ -228,61 +243,69 @@ def main(inputFile):
                 #######################################################################################################################################################
                 if newPos < 0 and geometry[0] == "V":
                     # Particle is lost to vacuum on left side
-                    trackLengths[energyGroup][cellIndex] += (pos - cellLeftBound(cellIndex))
+                    trackLengths[energyGroup][i][cellIndex] += ((pos - cellLeftBound(cellIndex))/abs(mu))
                     if cellIndex != 0: 
-                        trackLengths[energyGroup][0:cellIndex] += meshSize
+                        trackLengths[energyGroup][i][0:cellIndex] += (meshSize[material]/abs(mu))
 
                     # Update currents
                     firstEdge = cellIndex
-                    lastEdge = newCellIndex + 1
-                    currents[energyGroup][lastEdge:firstEdge+1] += mu
+                    lastEdge = 0
+                    currents[energyGroup][i][lastEdge:firstEdge+1] += mu
                     absorbed = True
                     continue
 
                 elif newPos < 0 and geometry[0] == "I":
                     # Particle is reflected on left side
-                    trackLengths[energyGroup][cellIndex] += (2 * (pos - cellLeftBound(cellIndex)))
-                    if cellIndex != 0: 
-                        trackLengths[energyGroup][0:cellIndex] += (2 * meshSize)
-                    
-                    # Update currents
-                    firstEdge = cellIndex
-                    lastEdge = newCellIndex + 1
-                    currents[energyGroup][lastEdge:firstEdge+1] += mu
 
+                    # Update tracklengths for travel to boundary
+                    trackLengths[energyGroup][i][cellIndex] += ((pos - cellLeftBound(cellIndex))/abs(mu))
+                    if cellIndex != 0: 
+                        trackLengths[energyGroup][i][0:cellIndex] += ((meshSize[material])/abs(mu))
+
+                    # Update currents for travel to boundary
+                    firstEdge = cellIndex
+                    lastEdge = 1
+                    currents[energyGroup][i][lastEdge:firstEdge+1] += mu
+
+                    # Calculate reflected travel distance, restart history loop
                     travelDistance += pos
-                    travelDistance *= -1 # Need to flip travel distance and direction
+                    pos = 0.0
+                    cellIndex = 0
+                    travelDistance *= -1
                     mu *= -1
                     resampleDir = False
                     resampleDist = False
                     continue
 
-                elif newPos > (meshSize * len(geom)) and geometry[3] == "V":
+                elif newPos > L_geom and geometry[-1] == "V":
                     # Particle is lost to vacuum on right side
-                    trackLengths[energyGroup][cellIndex] += (cellRightBound(cellIndex) - pos) # Add track length to start cell
+                    trackLengths[energyGroup][i][cellIndex] += ((cellRightBound(cellIndex) - pos)/abs(mu)) # Add track length to start cell
                     if cellIndex != len(geom)-1: 
-                        trackLengths[energyGroup][cellIndex+1:len(geom)-1] += meshSize # Add track length to other cells if start cell was not at boundary
+                        trackLengths[energyGroup][i][cellIndex+1:len(geom)] += (meshSize[material]/abs(mu)) # Add track length to other cells if start cell was not at boundary
                     
                     # Update currents
                     firstEdge = cellIndex + 1
-                    lastEdge = newCellIndex
-                    currents[energyGroup][firstEdge:lastEdge+1] += mu
+                    lastEdge = len(geom)
+                    currents[energyGroup][i][firstEdge:lastEdge+1] += mu
                     absorbed = True
                     continue
 
-                elif newPos > (meshSize * len(geom)) and geometry[3] == "I":
+                elif newPos > (L_geom) and geometry[-1] == "I":
                     # Particle is reflected on right side
-                    trackLengths[energyGroup][cellIndex] += (2 * (cellRightBound(cellIndex) - pos))
+                    trackLengths[energyGroup][i][cellIndex] += ((cellRightBound(cellIndex) - pos) / abs(mu))
                     if cellIndex != len(geom)-1: 
-                        trackLengths[energyGroup][cellIndex+1:len(geom)-1] += (2 * meshSize) # Add track length to other cells if start cell was not at boundary
+                        trackLengths[energyGroup][i][cellIndex+1:len(geom)] += ((meshSize[material])/abs(mu)) # Add track length to other cells if start cell was not at boundary
 
                     # Update currents
                     firstEdge = cellIndex + 1
-                    lastEdge = newCellIndex
-                    currents[energyGroup][firstEdge:lastEdge+1] += mu
+                    lastEdge = len(geom)-1
+                    currents[energyGroup][i][firstEdge:lastEdge+1] += mu
 
-                    travelDistance -= (cellRightBound(-1) - pos)
-                    travelDistance *= -1 # Need to flip travel distance and direction
+                    # Calculate reflected travel distance, restart history loop
+                    travelDistance -= (L_geom - pos)
+                    pos = L_geom
+                    cellIndex = len(geom) - 1
+                    travelDistance *= -1
                     mu *= -1
                     resampleDir = False
                     resampleDist = False
@@ -296,31 +319,32 @@ def main(inputFile):
                 # Right to left
                 if newCellIndex != cellIndex and travelDistance < 0:
                     # Update track lengths
-                    trackLengths[energyGroup][cellIndex] += (pos - cellLeftBound(cellIndex)) # Add track length to original cell
-                    trackLengths[energyGroup][newCellIndex+1:cellIndex] += meshSize # Add track length to cells along the way
-                    trackLengths[energyGroup][newCellIndex] += (cellRightBound(newCellIndex) - newPos) # Add track length to new cell location
+                    trackLengths[energyGroup][i][cellIndex] += ((pos - cellLeftBound(cellIndex))/abs(mu)) # Add track length to original cell
+                    trackLengths[energyGroup][i][newCellIndex+1:cellIndex] += (meshSize[material]/abs(mu)) # Add track length to cells along the way
+                    trackLengths[energyGroup][i][newCellIndex] += ((cellRightBound(newCellIndex) - newPos)/abs(mu)) # Add track length to new cell location
 
                     # Update currents
                     firstEdge = cellIndex
                     lastEdge = newCellIndex + 1
-                    currents[energyGroup][lastEdge:firstEdge+1] += mu
+                    currents[energyGroup][i][lastEdge:firstEdge+1] += mu
 
                 # Left to right
                 elif newCellIndex != cellIndex and travelDistance > 0:
                     # Update track lengths
-                    trackLengths[energyGroup][cellIndex] += (cellRightBound(cellIndex) - pos) # Add track length to original cell
-                    trackLengths[energyGroup][cellIndex+1:newCellIndex] += meshSize # Add track length to cells along the way
-                    trackLengths[energyGroup][newCellIndex] += (newPos - cellLeftBound(newCellIndex)) # Add track length to new cell location
+                    trackLengths[energyGroup][i][cellIndex] += ((cellRightBound(cellIndex) - pos)/abs(mu)) # Add track length to original cell
+                    trackLengths[energyGroup][i][cellIndex+1:newCellIndex] += (meshSize[material]/abs(mu)) # Add track length to cells along the way
+                    trackLengths[energyGroup][i][newCellIndex] += ((newPos - cellLeftBound(newCellIndex))/abs(mu)) # Add track length to new cell location
 
                     # Update currents
                     firstEdge = cellIndex + 1
                     lastEdge = newCellIndex
-                    currents[energyGroup][firstEdge:lastEdge+1] += mu
+                    currents[energyGroup][i][firstEdge:lastEdge+1] += mu
                 else:
-                    trackLengths[energyGroup][cellIndex] += abs(travelDistance)
+                    trackLengths[energyGroup][i][cellIndex] += (abs(travelDistance))
 
                 pos = newPos
                 cellIndex = newCellIndex
+                if cellIndex < 0 or cellIndex >= len(geom): raise RuntimeError("Cell error")
 
                 interactionSample = np.random.random(1)[0]
                 if interactionSample < xsDict[material][f"Capture_{energyGroup}"]:
@@ -342,69 +366,101 @@ def main(inputFile):
                 
                 resampleDir = True
                 resampleDist = True
-        
-        pass # This is where history loop ends
-        flux1 = trackLengths[1] / (k * meshSize * numHistories)
-        flux2 = trackLengths[2] / (k * meshSize * numHistories)
+                
+        ##########################################################################################################
+        # History loop ends
+        ##########################################################################################################
 
-        F_i = np.empty(len(geom))
-        
+        # Calculate fluxes for current generation
+        for j in range(len(geom)):
+            flux1[i][j] = trackLengths[1][i][j] / (k[i] * meshSize[geom[j]] * numHistories)
+            flux2[i][j] = trackLengths[2][i][j] / (k[i] * meshSize[geom[j]] * numHistories)
+
+        # Calculate center currents for current generation
+        for j in range(len(geom)):
+            centerCurrents[1][i][j] = (((currents[1][i][j] + currents[1][i][j+1])/2) / (k[i] * numHistories * meshSize[geom[j]]))
+            centerCurrents[2][i][j] = (((currents[2][i][j] + currents[2][i][j+1])/2) / (k[i] * numHistories *  meshSize[geom[j]]))
+
+
         # Recalculate fission source for next generation
-        for l in range(len(geom)):
-            if geom[l] == "W":
-                F_i[l] = 0
-            elif geom[l] == "U":
-                F_i[l] = (xsDict["U"]["Nu_f2"] * xsDict["U"]["Sigma_f2"]) * flux2[l]
-            elif geom[l] == "M":
-                F_i[l] = (xsDict["M"]["Nu_f2"] * xsDict["M"]["Sigma_f2"]) * flux2[l]
+        F_i = np.empty(len(geom))
+        for j in range(len(geom)):
+            if geom[j] == "W":
+                F_i[j] = 0
+            elif geom[j] == "U":
+                F_i[j] = (xsDict["U"]["Nu_f2"] * xsDict["U"]["Sigma_f2"]) * flux2[i][j]
+            elif geom[j] == "M":
+                F_i[j] = (xsDict["M"]["Nu_f2"] * xsDict["M"]["Sigma_f2"]) * flux2[i][j]
 
-        k *= (meshSize * np.sum(F_i))
-
-        print(k)
+        F_sum = 0
+        for j in range(len(F_i)):
+            F_sum += F_i[j] * meshSize[geom[j]]
+        k[i+1] *= (k[i] * F_sum)
     
-    # Calculate currents in centers of mesh
-    centerCurrents = {1:np.empty(len(currents[1])-1), 2:np.empty(len(currents[1])-1)}
-    for j in range(len(centerCurrents[1])):
-        centerCurrents[1][j] = ((currents[1][j] + currents[1][j+1]) / (numHistories * meshSize))
-        centerCurrents[2][j] = ((currents[2][j] + currents[2][j+1]) / (numHistories * meshSize))
+    runTime = time.time() - startTime
+    print(f"Time elapsed: {runTime:.2f} seconds")
+
+    fundamentalFlux1 = np.average(flux1[skipGenerations:,:],axis=0)
+    fundamentalFlux1_std = np.std(flux1[skipGenerations:,:],axis=0)
+    fundamentalFlux2 = np.average(flux2[skipGenerations:,:],axis=0)
+    fundamentalFlux2_std = np.std(flux2[skipGenerations:,:],axis=0)
+    fundamentalCurrent1 = np.average(centerCurrents[1][skipGenerations:,:],axis=0)
+    fundamentalCurrent1_std = np.std(centerCurrents[1][skipGenerations:,:],axis=0)
+    fundamentalCurrent2 = np.average(centerCurrents[2][skipGenerations:,:],axis=0)
+    fundamentalCurrent2_std = np.std(centerCurrents[2][skipGenerations:,:],axis=0)
+    fundamentalK = np.average(k[skipGenerations:])
+    fundamentalK_std = np.std(k[skipGenerations:])
 
     # Find fuel bounds for plotting
     fuelBounds = []
     for i in range(len(geom)-1):
         if (geom[i] == "U" or geom[i] == "M") and geom[i+1] == "W":
-            fuelBounds.append(i)
+            fuelBounds.append(cellRightBound(i))
         elif (geom[i+1] == "U" or geom[i+1] == "M") and geom[i] == "W":
-            fuelBounds.append(i+1)
+            fuelBounds.append(cellRightBound(i))
 
-    # print(np.mean(np.array(leftDir)))
-    # print(np.mean(np.array(rightDir)))
-
-    flux1 = trackLengths[1] / (meshSize * numHistories * numGenerations)
-    flux2 = trackLengths[2] / (meshSize * numHistories * numGenerations)
-
-    plt.figure(figsize=(23,12)) 
-    plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(flux1)), color="g", alpha=0.3) # Fuel boundaries
-    plt.errorbar(x=[0,len(geom)-1], y=np.zeros(2)*np.max(flux1), linestyle='', yerr=(np.max(flux1)), color="k", alpha=0.4) # Problem bounds
-    plt.plot(range(len(geom)), flux1, label="Group 1 Flux") 
-    plt.plot(range(len(geom)), flux2, label="Group 2 Flux")
-    plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
-    plt.legend()
-    plt.ylim(0, np.max(flux1))
-    plt.show()
-
-    plt.figure(figsize=(23,12)) 
-    plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(flux1)), color="g", alpha=0.3) # Fuel boundaries
-    plt.errorbar(x=[0,len(geom)-1], y=np.zeros(2)*np.max(flux1), linestyle='', yerr=(np.max(flux1)), color="k", alpha=0.4) # Problem bounds
-    plt.plot(range(len(geom)), centerCurrents[1], label="Group 1 Current")
-    plt.plot(range(len(geom)), centerCurrents[2], label="Group 2 Current")
-    plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
-    plt.legend()
-    plt.ylim(np.min(centerCurrents[1]), np.max(centerCurrents[1]))
-    plt.show()
-
-
-
+    cellCenters = []
+    for i in range(len(geom)):
+        cellCenters.append(cellCenter(i))
     
+    print(f"Fundamental k: {fundamentalK:.2f}")
+    print(f"Error: {fundamentalK_std/fundamentalK*100:.2f}%")
+
+    plt.figure(figsize=(23,12)) 
+    plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(fundamentalFlux1)), color="g", alpha=0.3) # Fuel boundaries
+    plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(fundamentalFlux1)), color="k", alpha=0.4) # Problem bounds
+    plt.plot(cellCenters, fundamentalFlux1, label="Group 1 Flux", c="b")
+    plt.scatter(cellCenters, fundamentalFlux1, c="b",s=0.5)  
+    plt.plot(cellCenters, fundamentalFlux2, label="Group 2 Flux", c="orange")
+    plt.scatter(cellCenters, fundamentalFlux2, c="orange",s=0.5) 
+    plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions") # Start positions
+    plt.legend()
+    plt.ylim(0, np.max(fundamentalFlux1))
+    plt.show()
+
+    plt.figure(figsize=(23,12)) 
+    plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(fundamentalCurrent1)), color="g", alpha=0.3) # Fuel boundaries
+    plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(fundamentalCurrent1)), color="k", alpha=0.4) # Problem bounds
+    plt.plot(cellCenters, fundamentalCurrent1, label="Group 1 Current")
+    plt.scatter(cellCenters, fundamentalCurrent1, c="b",s=0.5)
+    plt.plot(cellCenters, fundamentalCurrent2, label="Group 2 Current")
+    plt.scatter(cellCenters, fundamentalCurrent2, c="orange",s=0.5)
+    plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
+    plt.legend()
+    plt.ylim(np.min(fundamentalCurrent1), np.max(fundamentalCurrent1))
+    plt.show()
+
+    plt.figure(figsize=(23,12)) 
+    plt.plot(range(numGenerations+1), np.ones(numGenerations+1)*fundamentalK, c="k", label="Fundamental k")
+    plt.scatter(range(skipGenerations), k[0:skipGenerations], label="Multiplication Factor (skipped)", marker="X", c="r", s=150.0)
+    plt.scatter(range(skipGenerations, numGenerations+1), k[skipGenerations:], label="Multiplication Factor", c="b", s=150.0)
+    plt.legend()
+    plt.show()
+
+
+
+# TODO: Fix track length calculations - need to consider the direction
+# TODO: Check the edge finding for current in problem BC case
 
 
 if __name__ == "__main__":
