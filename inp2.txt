@@ -1,0 +1,36 @@
+############################
+# General Input Parameters #
+############################
+
+Power 3570
+Pitch 1.44
+D_Fuel 1.07
+L_Assem 14.4
+
+Fuel_Meshes 20
+Water_Meshes 10
+
+Assem1 U 17
+Assem2 U 17
+
+BC_Left V
+BC_Right V
+
+XS_Set FD1
+
+################################
+# Monte Carlo Input Parameters #
+################################
+
+Run_MC 0
+
+Histories 10000
+Generations 100
+Skipped_Gens 20
+
+
+######################################
+# Finite Difference Input Parameters #
+######################################
+
+Run_FD 1
