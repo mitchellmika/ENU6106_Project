@@ -1,8 +1,11 @@
 import csv
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 import math
 import time
+
+matplotlib.rcParams.update({'font.size': 20})
 
 def main(inputFile):
     # Read input file
@@ -17,9 +20,6 @@ def main(inputFile):
         numHistories = int(readlines[6])
         numGenerations = int(readlines[7])
         skipGenerations = int(readlines[8])
-
-    # Input checks
-    # TODO: Check if mesh size fits, try to bump to closest value that does fit
     
     # Read data file
     with open(f"xs_set{dataSet}.csv", mode="r") as file:
@@ -65,7 +65,13 @@ def main(inputFile):
     for mat in geometry[1:-1]:
         for i in range(17):
             if mat == "W":
-                geom.extend("W" * waterMeshesPerPin)
+                mfp = 1.0 / xsDict["W"]["Sigma_t1"]
+                refSize = 5 * mfp
+                refCells = int(refSize / meshSize["W"])
+                geom.extend("W" * refCells)
+                print(refCells)
+                print(refCells * meshSize["W"])
+                break
             else:
                 geom.extend("W" * int(waterMeshesPerPin/2) )
                 geom.extend(mat * fuelMeshesPerPin)
@@ -131,13 +137,9 @@ def main(inputFile):
     flux2 = np.zeros( (numGenerations,len(geom) ))
 
     # Begin generation loop
-    # TODO: Current tracking for infinite lattice condition
     starts = []
-    leftDir = []
-    rightDir =[]
     k = np.ones(numGenerations+1)
 
-    #TODO: Implement power
     startTime = time.time()
     for i in range(numGenerations):
         print(f"Generation {i}: k={k[i]:.4f}")
@@ -163,31 +165,33 @@ def main(inputFile):
             resampleDist = True
             while not absorbed:
                 material = geom[cellIndex]
-                
 
-                squiggly = np.random.random(1)[0]
                 if resampleDir:
                     randDir = np.random.random(1)[0]
                     mu = 2*randDir - 1
 
                 if resampleDist:
+                    squiggly = np.random.random(1)[0]
                     travelDistance = (-math.log(squiggly) / xsDict[material][f"Sigma_t{energyGroup}"]) * mu
 
                 # Update position and cell index (assuming no mat or problem boundary crossed, will check later)
                 newPos = travelDistance + pos
                 newCellIndex = posToIndex(newPos)
 
+                matChange = False
+                resampleDir = True
+                resampleDist = True
+
                 ##########################################################################################################################################################
                 # Check for material crosing along the way
                 # If material changes, need to add track lengths and resample travel distance at material boundary
                 #########################################################################################################################################################
-                # TODO: Check if I am missing out on adding the current to where the material boundary is
                 # For right to left
                 if travelDistance < 0:
-                    matChange = False
-                    edgeCell = 0 if newCellIndex < 0 else newCellIndex # Use to handle cases where particle crosses problem boundary
+                    edgeCell = 0 if newCellIndex < 0 else newCellIndex-1 # Use to handle cases where particle crosses problem boundary
 
-                    for cell in range(cellIndex,edgeCell, -1): # iterate from travelled distance from right to left before original cell to find where material change occurs
+                    rng = range(cellIndex,edgeCell, -1)
+                    for cell in rng: # iterate from travelled distance from right to left before original cell to find where material change occurs
                         if geom[cell] is not geom[cellIndex]: # Enter if material change found along path
                             newCellIndex = cell
 
@@ -206,16 +210,13 @@ def main(inputFile):
                             resampleDist = True
                             matChange=True
                             break
-                        
-                    if matChange:
-                        continue
 
                 # For left to right
                 else:
-                    matChange = False
-                    edgeCell = len(geom)-1 if newCellIndex > len(geom)-1 else newCellIndex # Use to handle cases where particle crosses problem boundary
+                    edgeCell = len(geom)-1 if (newCellIndex > len(geom)-1) else newCellIndex # Use to handle cases where particle crosses problem boundary
 
-                    for cell in range(cellIndex,edgeCell+1): # iterate from travelled distance from right to left before original cell to find where material change occurs
+                    rng = range(cellIndex,edgeCell+1)
+                    for cell in rng: # iterate from travelled distance from right to left before original cell to find where material change occurs
                         if geom[cell] is not geom[cellIndex]: # Enter if material change found along path
                             newCellIndex = cell
 
@@ -235,9 +236,8 @@ def main(inputFile):
                             matChange=True
                             break
 
-                    if matChange:
-                        continue
-                    
+                if matChange:
+                        continue  
                 #######################################################################################################################################################
                 # Check for problem boundary crossing
                 #######################################################################################################################################################
@@ -252,6 +252,8 @@ def main(inputFile):
                     lastEdge = 0
                     currents[energyGroup][i][lastEdge:firstEdge+1] += mu
                     absorbed = True
+                    resampleDir = True
+                    resampleDist = True
                     continue
 
                 elif newPos < 0 and geometry[0] == "I":
@@ -288,6 +290,8 @@ def main(inputFile):
                     lastEdge = len(geom)
                     currents[energyGroup][i][firstEdge:lastEdge+1] += mu
                     absorbed = True
+                    resampleDir = True
+                    resampleDist = True
                     continue
 
                 elif newPos > (L_geom) and geometry[-1] == "I":
@@ -388,9 +392,9 @@ def main(inputFile):
             if geom[j] == "W":
                 F_i[j] = 0
             elif geom[j] == "U":
-                F_i[j] = (xsDict["U"]["Nu_f2"] * xsDict["U"]["Sigma_f2"]) * flux2[i][j]
+                F_i[j] = ((xsDict["U"]["Nu_f2"] * xsDict["U"]["Sigma_f2"] ) * flux2[i][j]) + ((xsDict["U"]["Nu_f1"] * xsDict["U"]["Sigma_f1"] ) * flux1[i][j])
             elif geom[j] == "M":
-                F_i[j] = (xsDict["M"]["Nu_f2"] * xsDict["M"]["Sigma_f2"]) * flux2[i][j]
+                F_i[j] = ((xsDict["M"]["Nu_f2"] * xsDict["M"]["Sigma_f2"])) * flux2[i][j] + ((xsDict["M"]["Nu_f1"] * xsDict["M"]["Sigma_f1"]) * flux1[i][j])
 
         F_sum = 0
         for j in range(len(F_i)):
@@ -422,45 +426,87 @@ def main(inputFile):
     cellCenters = []
     for i in range(len(geom)):
         cellCenters.append(cellCenter(i))
-    
-    print(f"Fundamental k: {fundamentalK:.2f}")
+
+    avgFlux1Assem1 = np.average(fundamentalFlux1[fuelCells[0:int(len(fuelCells)/2)]])
+    avgFlux1Assem2 = np.average(fundamentalFlux1[fuelCells[int(len(fuelCells)/2):]])
+    avgFlux2Assem1 = np.average(fundamentalFlux2[fuelCells[0:int(len(fuelCells)/2)]])
+    avgFlux2Assem2 = np.average(fundamentalFlux2[fuelCells[int(len(fuelCells)/2):]])
+
+    rxnRate1Assem1 = avgFlux1Assem1 * xsDict[geom[fuelCells[0]]]["Sigma_f1"]
+    rxnRate1Assem2 = avgFlux1Assem2 * xsDict[geom[fuelCells[-1]]]["Sigma_f1"]
+    rxnRate2Assem1 = avgFlux2Assem1 * xsDict[geom[fuelCells[0]]]["Sigma_f2"]
+    rxnRate2Assem2 = avgFlux2Assem2 * xsDict[geom[fuelCells[-1]]]["Sigma_f2"]
+
+    energyPerFission = 1.6022E-13 # Joules
+
+    energyRelease = ((rxnRate1Assem1 + rxnRate1Assem2 + rxnRate2Assem1 + rxnRate2Assem2) * energyPerFission) / 1E6 # MW
+
+    powerFactor = power / energyRelease
+
+    print(f"Fundamental k: {fundamentalK:.5f}")
     print(f"Error: {fundamentalK_std/fundamentalK*100:.2f}%")
 
-    plt.figure(figsize=(23,12)) 
+    plt.figure(figsize=(23,10)) 
     plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(fundamentalFlux1)), color="g", alpha=0.3) # Fuel boundaries
     plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(fundamentalFlux1)), color="k", alpha=0.4) # Problem bounds
     plt.plot(cellCenters, fundamentalFlux1, label="Group 1 Flux", c="b")
     plt.scatter(cellCenters, fundamentalFlux1, c="b",s=0.5)  
     plt.plot(cellCenters, fundamentalFlux2, label="Group 2 Flux", c="orange")
     plt.scatter(cellCenters, fundamentalFlux2, c="orange",s=0.5) 
-    plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions") # Start positions
     plt.legend()
     plt.ylim(0, np.max(fundamentalFlux1))
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Neutron Flux (1 / cm^2 - s)")
     plt.show()
 
-    plt.figure(figsize=(23,12)) 
+    plt.figure(figsize=(23,10)) 
+    plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(fundamentalFlux1)*powerFactor), color="g", alpha=0.3) # Fuel boundaries
+    plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(fundamentalFlux1)*powerFactor), color="k", alpha=0.4) # Problem bounds
+    plt.plot(cellCenters, fundamentalFlux1 * powerFactor, label="Group 1 Flux", c="b")
+    plt.scatter(cellCenters, fundamentalFlux1 * powerFactor, c="b",s=0.5)  
+    plt.plot(cellCenters, fundamentalFlux2 * powerFactor, label="Group 2 Flux", c="orange")
+    plt.scatter(cellCenters, fundamentalFlux2 * powerFactor, c="orange",s=0.5) 
+    plt.legend()
+    plt.ylim(0, np.max(fundamentalFlux1 * powerFactor))
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Neutron Flux (1 / cm^2 - s)")
+    plt.show()
+
+    plt.figure(figsize=(23,10)) 
     plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(fundamentalCurrent1)), color="g", alpha=0.3) # Fuel boundaries
     plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(fundamentalCurrent1)), color="k", alpha=0.4) # Problem bounds
     plt.plot(cellCenters, fundamentalCurrent1, label="Group 1 Current")
     plt.scatter(cellCenters, fundamentalCurrent1, c="b",s=0.5)
     plt.plot(cellCenters, fundamentalCurrent2, label="Group 2 Current")
     plt.scatter(cellCenters, fundamentalCurrent2, c="orange",s=0.5)
-    plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
+    # plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
     plt.legend()
     plt.ylim(np.min(fundamentalCurrent1), np.max(fundamentalCurrent1))
+    plt.xlabel("Position (cm)")
+    plt.ylabel("Neutron Current")
     plt.show()
 
-    plt.figure(figsize=(23,12)) 
+    # allBounds = list(set(leftBounds + rightBounds))
+    # plt.figure(figsize=(23,10)) 
+    # plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(fundamentalCurrent1)), color="g", alpha=0.3) # Fuel boundaries
+    # plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(fundamentalCurrent1)), color="k", alpha=0.4) # Problem bounds
+    # #plt.plot(allBounds, currents[1][0], label="Group 1 Current")
+    # plt.scatter(allBounds, currents[1][0], c="b")
+    # #plt.plot(allBounds, currents[2][0], label="Group 2 Current")
+    # plt.scatter(allBounds, currents[2][0], c="orange")
+    # plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
+    # plt.legend()
+    # #plt.ylim(np.min(fundamentalCurrent1), np.max(fundamentalCurrent1))
+    # plt.show()
+
+    plt.figure(figsize=(23,10)) 
     plt.plot(range(numGenerations+1), np.ones(numGenerations+1)*fundamentalK, c="k", label="Fundamental k")
     plt.scatter(range(skipGenerations), k[0:skipGenerations], label="Multiplication Factor (skipped)", marker="X", c="r", s=150.0)
     plt.scatter(range(skipGenerations, numGenerations+1), k[skipGenerations:], label="Multiplication Factor", c="b", s=150.0)
     plt.legend()
+    plt.xlabel("Generation")
+    plt.ylabel("Multiplication Factor")
     plt.show()
-
-
-
-# TODO: Fix track length calculations - need to consider the direction
-# TODO: Check the edge finding for current in problem BC case
 
 
 if __name__ == "__main__":
