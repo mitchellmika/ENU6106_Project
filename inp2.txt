@@ -3,20 +3,20 @@
 ############################
 
 Power 3570
-Pitch 1.44
-D_Fuel 1.07
-L_Assem 14.4
+Pitch 1.4385
+D_Fuel 1.1058
+L_Assem 24.4545
 
 Fuel_Meshes 20
 Water_Meshes 10
 
-Assem1 U 17
-Assem2 U 17
+Assem1 U 2 C 1 U 11 C 1 U 2
+Assem2 U 2 C 1 U 11 C 1 U 2
 
-BC_Left V
-BC_Right V
+BC_Left I
+BC_Right W
 
-XS_Set FD1
+XS_Set 2
 
 ################################
 # Monte Carlo Input Parameters #

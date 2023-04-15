@@ -51,64 +51,43 @@ def main(inputFile):
     with open(f"xs_set{dataSet}.csv", mode="r") as file:
         csvFile = csv.reader(file)
         xsDict = {}
-        if "MC" in dataSet:
-            for line in csvFile:
-                xsDict[line[0]] = {
-                    "Sigma_tr1":float(line[1]),
-                    "Sigma_s11":float(line[2]),
-                    "Sigma_s12":float(line[3]),
-                    "Sigma_a1":float(line[4]),
-                    "Sigma_f1":float(line[5]),
-                    "Sigma_c1":float(line[4]) - float(line[5]),
-                    "Sigma_t1":float(line[2]) + float(line[3]) + float(line[4]),
-                    "Capture_1":(float(line[4]) - float(line[5])) / (float(line[2]) + float(line[3]) + float(line[4])), # Upper cdf bound for capture interaction in g1
-                    "Fission_1":float(line[4]) / (float(line[2]) + float(line[3]) + float(line[4])), # Upper cdf bound for fission in g1
-                    "InScatter_1":(float(line[4]) + float(line[2])) / (float(line[2]) + float(line[3]) + float(line[4])), # Upper cdf bound for inscatter in g1
-                    "Nu_f1":float(line[6]),
-                    "Chi_1":float(line[7]),
-                    "Sigma_tr2":float(line[8]),
-                    "Sigma_s22":float(line[9]),
-                    "Sigma_s21":float(line[10]),
-                    "Sigma_a2":float(line[11]),
-                    "Sigma_f2":float(line[12]),
-                    "Sigma_c2":float(line[11]) - float(line[12]),
-                    "Sigma_t2":float(line[9]) + float(line[10]) + float(line[11]),
-                    "Capture_2": (float(line[11]) - float(line[12])) / (float(line[9]) + float(line[10]) + float(line[11])),
-                    "Fission_2":float(line[11]) / ((float(line[9]) + float(line[10]) + float(line[11]))),
-                    "InScatter_2":(float(line[11]) + float(line[9]))  / ((float(line[9]) + float(line[10]) + float(line[11]))),
-                    "Nu_f2":float(line[13]),
-                    "Chi_2":float(line[14])
-                }
-        elif "FD" in dataSet:
-            for line in csvFile:
-                xsDict[line[0]] = {
-                    "Sigma_t1":float(line[1]),
-                    "Sigma_tr1":float(line[1]),
-                    "D_1": 1 / (3*float(line[1])),
-                    "Sigma_s11":float(line[2]),
-                    "Sigma_s12":float(line[3]),
-                    "Sigma_a1":float(line[4]),
-                    "Sigma_r1":float(line[4]) + float(line[3]),
-                    "Sigma_f1":float(line[5]),
-                    "Nu_f1":float(line[6]),
-                    "Chi_1":float(line[7]),
-                    "Sigma_t2":float(line[8]),
-                    "Sigma_tr2":float(line[8]),
-                    "D_2": 1 / (3*float(line[8])),
-                    "Sigma_s22":float(line[9]),
-                    "Sigma_s21":float(line[10]),
-                    "Sigma_a2":float(line[11]),
-                    "Sigma_r2":float(line[11]) + float(line[10]),
-                    "Sigma_f2":float(line[12]),
-                    "Nu_f2":float(line[13]),
-                    "Chi_2":float(line[14])
-                }
+        for line in csvFile:
+            xsDict[line[0]] = {
+                "Sigma_tr1":float(line[1]),
+                "D_1": 1 / (3*float(line[1])),
+                "Sigma_s11":float(line[2]),
+                "Sigma_s12":float(line[3]),
+                "Sigma_a1":float(line[4]),
+                "Sigma_r1":float(line[4]) + float(line[3]),
+                "Sigma_f1":float(line[5]),
+                "Sigma_c1":float(line[4]) - float(line[5]),
+                "Sigma_t1":float(line[2]) + float(line[3]) + float(line[4]),
+                "Capture_1":(float(line[4]) - float(line[5])) / (float(line[2]) + float(line[3]) + float(line[4])), # Upper cdf bound for capture interaction in g1
+                "Fission_1":float(line[4]) / (float(line[2]) + float(line[3]) + float(line[4])), # Upper cdf bound for fission in g1
+                "InScatter_1":(float(line[4]) + float(line[2])) / (float(line[2]) + float(line[3]) + float(line[4])), # Upper cdf bound for inscatter in g1
+                "Nu_f1":float(line[6]),
+                "Chi_1":float(line[7]),
+                "Sigma_tr2":float(line[8]),
+                "D_2": 1 / (3*float(line[8])),
+                "Sigma_s22":float(line[9]),
+                "Sigma_s21":float(line[10]),
+                "Sigma_a2":float(line[11]),
+                "Sigma_r2":float(line[10]) + float(line[11]),
+                "Sigma_f2":float(line[12]),
+                "Sigma_c2":float(line[11]) - float(line[12]),
+                "Sigma_t2":float(line[9]) + float(line[10]) + float(line[11]),
+                "Capture_2": (float(line[11]) - float(line[12])) / (float(line[9]) + float(line[10]) + float(line[11])),
+                "Fission_2":float(line[11]) / ((float(line[9]) + float(line[10]) + float(line[11]))),
+                "InScatter_2":(float(line[11]) + float(line[9]))  / ((float(line[9]) + float(line[10]) + float(line[11]))),
+                "Nu_f2":float(line[13]),
+                "Chi_2":float(line[14])
+            }
     
     # Define geometry
     if waterMeshesPerPin % 2 != 0:
         raise RuntimeError("Num water meshes must be divisible by 2 in order to accomodate half pin")
     D_water = P - D_fuel
-    meshSize = {"W": (D_water / waterMeshesPerPin), "M":(D_fuel / fuelMeshesPerPin), "U":(D_fuel / fuelMeshesPerPin)}
+    meshSize = {"W": (D_water / waterMeshesPerPin), "M":(D_fuel / fuelMeshesPerPin), "U":(D_fuel / fuelMeshesPerPin), "C":(D_fuel / fuelMeshesPerPin)}
 
     geom = []
     if geometry[0] == "W":
@@ -574,59 +553,63 @@ def main(inputFile):
         coeffMatrix_1 = np.zeros((N,N))
         coeffMatrix_2 = np.zeros((N,N))
 
+        d_1kk = lambda i1,i2: (2 * d_1[i1] * d_1[i2]) / (d_1[i1] + d_1[i2])
+        d_2kk = lambda i1,i2: (2 * d_2[i1] * d_2[i2]) / (d_2[i1] + d_2[i2])
+
         # Manual creation at problem boundaries
         # Left bound
         if geometry[0] == "V" or geometry[0] == "W":
             beta_left_1 = 1 / (1 + (1 / (4 * d_1[0])))
             beta_left_2 = 1 / (1 + (1 / (4 * d_2[0])))
 
-            coeffMatrix_1[0][0] = 2 * d_1[0] * (1 - beta_left_1) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + (2 * d_1[0] * d_1[1] / (d_1[0] + d_1[1]))
-            coeffMatrix_1[0][1] = (2 * d_1[0] * d_1[1] / (d_1[0] + d_1[1]))
+            coeffMatrix_1[0][0] = 2 * d_1[0] * (1 - beta_left_1) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + d_1kk(0,1)
+            coeffMatrix_1[0][1] = -d_1kk(0,1)
 
-            coeffMatrix_2[0][0] = 2 * d_2[0] * (1 - beta_left_2) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + (2 * d_2[0] * d_2[1] / (d_2[0] + d_2[1]))
-            coeffMatrix_2[0][1] = (2 * d_1[0] * d_1[1] / (d_1[0] + d_1[1]))
+            coeffMatrix_2[0][0] = 2 * d_2[0] * (1 - beta_left_2) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + d_2kk(0,1)
+            coeffMatrix_2[0][1] = -d_2kk(0,1)
         else:
             beta_left_1 = 1
             beta_left_2 = 1
 
-            coeffMatrix_1[0][0] = 2 * d_1[0] * (1 - beta_left_1) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + (2 * d_1[0] * d_1[1] / (d_1[0] + d_1[1]))
-            coeffMatrix_1[0][1] = (2 * d_1[0] * d_1[1] / (d_1[0] + d_1[1]))
+            coeffMatrix_1[0][0] = 2 * d_1[0] * (1 - beta_left_1) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + d_1kk(0,1)
+            coeffMatrix_1[0][1] = -d_1kk(0,1)
 
-            coeffMatrix_2[0][0] = 2 * d_2[0] * (1 - beta_left_2) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + (2 * d_2[0] * d_2[1] / (d_2[0] + d_2[1]))
-            coeffMatrix_1[0][1] = (2 * d_1[0] * d_1[1] / (d_1[0] + d_1[1]))
+            coeffMatrix_2[0][0] = 2 * d_2[0] * (1 - beta_left_2) + meshSize[geom[0]] * xsDict[geom[0]]["Sigma_r1"] + d_2kk(0,1)
+            coeffMatrix_2[0][1] = -d_2kk(0,1)
         
         # Right bound
         if geometry[-1] == "V" or geometry[-1] == "W":
             beta_left_1 = 1 / (1 + (1 / (4 * d_1[-1])))
             beta_left_2 = 1 / (1 + (1 / (4 * d_2[-1])))
 
-            coeffMatrix_1[-1][-1] = 2 * d_1[-1] * (1 - beta_left_1) + meshSize[geom[-1]] * xsDict[geom[-1]]["Sigma_r1"] + (2 * d_1[-1] * d_1[-2] / (d_1[-1] + d_1[-2]))
-            coeffMatrix_1[i][i-1] = (2 * d_1[i] * d_1[i-1] / (d_1[i] + d_1[i-1]))
+            coeffMatrix_1[-1][-1] = 2 * d_1[-1] * (1 - beta_left_1) + meshSize[geom[-1]] * xsDict[geom[-1]]["Sigma_r1"] + d_1kk(-1,-2)
+            coeffMatrix_1[-1][-2] = -d_1kk(-1,-2)
 
-            coeffMatrix_2[-1][-1] = 2 * d_2[-1] * (1 - beta_left_2) + meshSize[geom[-1]] * xsDict[geom[-1]]["Sigma_r1"] + (2 * d_2[-1] * d_2[-2] / (d_2[-1] + d_2[-2]))
-            coeffMatrix_1[i][i-1] = (2 * d_1[i] * d_1[i-1] / (d_1[i] + d_1[i-1]))
+            coeffMatrix_2[-1][-1] = 2 * d_2[-1] * (1 - beta_left_2) + meshSize[geom[-1]] * xsDict[geom[-1]]["Sigma_r1"] + d_2kk(-1,-2)
+            coeffMatrix_2[-1][-2] = -d_2kk(-1,-2)
 
         else:
             beta_left_1 = 1
             beta_left_2 = 1
 
-            coeffMatrix_1[-1][-1] = 2 * d_1[-1] * (1 - beta_left_1) + meshSize[geom[-1]] * xsDict[geom[0]]["Sigma_r1"] + (2 * d_1[-1] * d_1[-1] / (d_1[-1] + d_1[-2]))
-            coeffMatrix_1[i][i-1] = (2 * d_1[i] * d_1[i-1] / (d_1[i] + d_1[i-1]))
+            coeffMatrix_1[-1][-1] = 2 * d_1[-1] * (1 - beta_left_1) + meshSize[geom[-1]] * xsDict[geom[0]]["Sigma_r1"] + d_1kk(-1,-2)
+            coeffMatrix_1[-1][-2] = -d_1kk(-1,-2)
 
-            coeffMatrix_2[-1][-1] = 2 * d_2[-1] * (1 - beta_left_2) + meshSize[geom[-1]] * xsDict[geom[0]]["Sigma_r1"] + (2 * d_2[-1] * d_2[-1] / (d_2[-1] + d_2[-2]))
-            coeffMatrix_1[i][i-1] = (2 * d_1[i] * d_1[i-1] / (d_1[i] + d_1[i-1]))
+            coeffMatrix_2[-1][-1] = 2 * d_2[-1] * (1 - beta_left_2) + meshSize[geom[-1]] * xsDict[geom[0]]["Sigma_r1"] + d_2kk(-1,-2)
+            coeffMatrix_2[-1][-2] = -d_2kk(-1,-2)
         
         # Populate matrix
         for i in range(1,N-1):
-            coeffMatrix_1[i][i-1] = (2 * d_1[i] * d_1[i-1] / (d_1[i] + d_1[i-1]))
-            coeffMatrix_1[i][i] = (2 * d_1[i] * d_1[i-1] / (d_1[i] + d_1[i-1])) + (2 * d_1[i] * d_1[i+1] / (d_1[i] + d_1[i+1])) + meshSize[geom[i]] * xsDict[geom[i]]["Sigma_r1"]
-            coeffMatrix_1[i][i+1] = (2 * d_1[i] * d_1[i+1] / (d_1[i] + d_1[i+1]))
+            coeffMatrix_1[i][i-1] = -d_1kk(i,i-1)
+            coeffMatrix_1[i][i] = d_1kk(i,i-1) + d_1kk(i,i+1) + meshSize[geom[i]] * xsDict[geom[i]]["Sigma_r1"]
+            coeffMatrix_1[i][i+1] = -d_1kk(i,i+1)
 
-            coeffMatrix_2[i][i-1] = (2 * d_2[i] * d_2[i-1] / (d_2[i] + d_2[i-1]))
-            coeffMatrix_2[i][i] = (2 * d_2[i] * d_2[i-1] / (d_2[i] + d_2[i-1])) + (2 * d_2[i] * d_2[i+1] / (d_2[i] + d_2[i+1])) + meshSize[geom[i]] * xsDict[geom[i]]["Sigma_r2"]
-            coeffMatrix_2[i][i+1] = (2 * d_2[i] * d_2[i+1] / (d_2[i] + d_2[i+1]))
+            coeffMatrix_2[i][i-1] = -d_2kk(i,i-1)
+            coeffMatrix_2[i][i] = d_2kk(i,i-1) + d_2kk(i,i+1) + meshSize[geom[i]] * xsDict[geom[i]]["Sigma_r2"]
+            coeffMatrix_2[i][i+1] = -d_2kk(i,i+1)
         
         # Initialize values
+
         flux1 = np.ones(N)
         flux2 = np.ones(N)
 
@@ -653,13 +636,13 @@ def main(inputFile):
 
             rhs_2 = np.zeros(N)
             for i in range(N):
-                rhs_2[i] += (xsDict[geom[i]]["Sigma_s12"] * flux1_new[i])
+                rhs_2[i] += ( meshSize[geom[i]] * xsDict[geom[i]]["Sigma_s12"] * flux1_new[i])
             
             flux2_new = np.linalg.solve(coeffMatrix_2, rhs_2)
 
             Q_new = np.ones(N)
             for i in range(N):
-                Q_new[i] *= (meshSize[geom[i]] * (xsDict[geom[i]]["Nu_f1"] * xsDict[geom[i]]["Sigma_f1"] * flux1[i] + xsDict[geom[i]]["Nu_f2"] * xsDict[geom[i]]["Sigma_f2"] * flux2[i]))
+                Q_new[i] *= (meshSize[geom[i]] * (xsDict[geom[i]]["Nu_f1"] * xsDict[geom[i]]["Sigma_f1"] * flux1_new[i] + xsDict[geom[i]]["Nu_f2"] * xsDict[geom[i]]["Sigma_f2"] * flux2_new[i]))
 
             k_new = np.sum(Q_new) / (np.sum(Q) / k)
 
@@ -671,7 +654,7 @@ def main(inputFile):
             flux2 = flux2_new
             k = k_new
 
-        print(k)
+            print(k)
 
 
 
