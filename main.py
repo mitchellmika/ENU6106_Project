@@ -130,9 +130,25 @@ def main(inputFile):
             if cellLeftBound(ind) < pos < cellRightBound(ind):
                 return ind
     
+    nonWaterCells = np.where(np.array(geom) != "W")[0]
+    nonControlCells = np.where(np.array(geom) != "C")[0]
+
+    fuelCells = np.intersect1d(nonWaterCells, nonControlCells)
+
+    # Calculate fuel bounds for later plotting
+    fuelBounds = []
+    for i in range(len(geom)-1):
+        if (geom[i] == "U" or geom[i] == "M" or geom[i] == "C") and geom[i+1] == "W":
+            fuelBounds.append(cellRightBound(i))
+        elif (geom[i+1] == "U" or geom[i+1] == "M" or geom[i+1] == "C") and geom[i] == "W":
+            fuelBounds.append(cellRightBound(i))
+
+    cellCenters = []
+    for i in range(len(geom)):
+        cellCenters.append(cellCenter(i))
+
     if runMC:
         # Define fission distribution
-        fuelCells = np.where(np.array(geom) != "W")[0]
         UCells = np.where(np.array(geom) == "U")[0]
         MCells = np.where(np.array(geom) == "M")[0]
         numUCells = len(UCells)
@@ -415,7 +431,6 @@ def main(inputFile):
                 centerCurrents[1][i][j] = (((currents[1][i][j] + currents[1][i][j+1])/2) / (k[i] * numHistories * meshSize[geom[j]]))
                 centerCurrents[2][i][j] = (((currents[2][i][j] + currents[2][i][j+1])/2) / (k[i] * numHistories *  meshSize[geom[j]]))
 
-
             # Recalculate fission source for next generation
             F_i = np.empty(len(geom))
             for j in range(len(geom)):
@@ -445,18 +460,6 @@ def main(inputFile):
         fundamentalK = np.average(k[skipGenerations:])
         fundamentalK_std = np.std(k[skipGenerations:])
 
-        # Find fuel bounds for plotting
-        fuelBounds = []
-        for i in range(len(geom)-1):
-            if (geom[i] == "U" or geom[i] == "M") and geom[i+1] == "W":
-                fuelBounds.append(cellRightBound(i))
-            elif (geom[i+1] == "U" or geom[i+1] == "M") and geom[i] == "W":
-                fuelBounds.append(cellRightBound(i))
-
-        cellCenters = []
-        for i in range(len(geom)):
-            cellCenters.append(cellCenter(i))
-
         avgFlux1Assem1 = np.average(fundamentalFlux1[fuelCells[0:int(len(fuelCells)/2)]])
         avgFlux1Assem2 = np.average(fundamentalFlux1[fuelCells[int(len(fuelCells)/2):]])
         avgFlux2Assem1 = np.average(fundamentalFlux2[fuelCells[0:int(len(fuelCells)/2)]])
@@ -471,7 +474,7 @@ def main(inputFile):
 
         energyRelease = ((rxnRate1Assem1 + rxnRate1Assem2 + rxnRate2Assem1 + rxnRate2Assem2) * energyPerFission) / 1E6 # MW
 
-        powerFactor = power / energyRelease
+        powerFactor = (power / energyRelease) * meshSize["U"]
 
         print(f"Fundamental k: {fundamentalK:.5f}")
         print(f"Error: {fundamentalK_std/fundamentalK*100:.2f}%")
@@ -620,16 +623,15 @@ def main(inputFile):
             Q[i] *= (meshSize[geom[i]] * (xsDict[geom[i]]["Nu_f1"] * xsDict[geom[i]]["Sigma_f1"] * flux1[i] + xsDict[geom[i]]["Nu_f2"] * xsDict[geom[i]]["Sigma_f2"] * flux2[i]))
 
         # TODO: Put this in the input file
-        epsilon_k = 1E-5
-        epsilon_flux1 = 1E-3
-        epsilon_flux2 = 1E-3
+        epsilon_k = 1E-3
+        epsilon_flux = 1E-5
 
         flux1_diff = 1.0
         flux2_diff = 1.0
         k_diff = 1.0
 
         # Enter iteration loop for solving
-        while k_diff > epsilon_k or flux1_diff > epsilon_flux1 or flux2_diff > epsilon_flux2:
+        while k_diff > epsilon_k or flux1_diff > epsilon_flux or flux2_diff > epsilon_flux:
             rhs_1 = Q / k
 
             flux1_new = np.linalg.solve(coeffMatrix_1, rhs_1)
@@ -655,6 +657,78 @@ def main(inputFile):
             k = k_new
 
             print(k)
+
+        # Apply power condition
+        sumFuelFlux1Assem1 = np.sum(flux1[fuelCells[0:int(len(fuelCells)/2)]])
+        sumFuelFlux2Assem1 = np.sum(flux2[fuelCells[0:int(len(fuelCells)/2)]])
+
+        sumFuelFlux1Assem2 = np.sum(flux1[fuelCells[int(len(fuelCells)/2):]])
+        sumFuelFlux2Assem2 = np.sum(flux2[fuelCells[int(len(fuelCells)/2):]])
+
+        energyPerFission = 200 * 1.6022E-13 # Joules
+
+        denom = energyPerFission * meshSize["U"] * (sumFuelFlux1Assem1 * xsDict[geom[fuelCells[0]]]["Sigma_f1"] + sumFuelFlux2Assem1 * xsDict[geom[fuelCells[0]]]["Sigma_f2"] + sumFuelFlux1Assem2 * xsDict[geom[fuelCells[-1]]]["Sigma_f1"] + sumFuelFlux2Assem2 * xsDict[geom[fuelCells[-1]]]["Sigma_f2"])
+
+        powerFactor = power / denom
+
+        # Calculate edge currents
+        edgeCurrents1 = []
+        edgeCurrents2 = []
+
+        if geometry[0] == "V":
+            edgeCurrents1.append((-2*d_1[0] / (4*d_1[0] + 1)) * flux1[0])
+            edgeCurrents2.append((-2*d_2[0] / (4*d_2[0] + 1)) * flux2[0])
+        else:
+            edgeCurrents1.append(0)
+            edgeCurrents2.append(0)
+
+
+        for i in range(1,N):
+            edgeCurrents1.append(-d_1kk(i,i-1) * (flux1[i] - flux1[i-1]))
+            edgeCurrents2.append(-d_2kk(i,i-1) * (flux1[i] - flux1[i-1]))
+        
+        if geometry[0] == "V":
+            edgeCurrents1.append((-2*d_1[-1] / (4*d_1[-1] + 1)) * flux1[-1])
+            edgeCurrents2.append((-2*d_2[-1] / (4*d_2[-1] + 1)) * flux2[-1])
+        else:
+            edgeCurrents1.append(0)
+            edgeCurrents2.append(0)
+        
+        # Calculate center currents
+
+        
+        
+        plt.figure(figsize=(23,10)) 
+        plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(flux1)+1), color="g", alpha=0.3) # Fuel boundaries
+        plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(flux1)+1), color="k", alpha=0.4) # Problem bounds
+        plt.plot(cellCenters, flux1, label="Group 1 Flux", c="b")
+        plt.scatter(cellCenters, flux1, c="b",s=0.5)  
+        plt.plot(cellCenters, flux2, label="Group 2 Flux", c="orange")
+        plt.scatter(cellCenters, flux2, c="orange",s=0.5) 
+        plt.legend()
+        plt.ylim(0, np.max(flux1)+1)
+        plt.xlabel("Position (cm)")
+        plt.ylabel("Neutron Flux (1 / cm^2 - s)")
+        plt.show()
+
+        plt.figure(figsize=(23,10)) 
+        plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(flux1)*powerFactor * 1.2), color="g", alpha=0.3) # Fuel boundaries
+        plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(flux1)*powerFactor* 1.2), color="k", alpha=0.4) # Problem bounds
+        plt.plot(cellCenters, flux1*powerFactor, label="Group 1 Flux", c="b")
+        plt.scatter(cellCenters, flux1*powerFactor, c="b",s=0.5)  
+        plt.plot(cellCenters, flux2*powerFactor, label="Group 2 Flux", c="orange")
+        plt.scatter(cellCenters, flux2*powerFactor, c="orange",s=0.5) 
+        plt.legend()
+        plt.ylim(0, np.max(flux1*powerFactor* 1.2))
+        plt.xlabel("Position (cm)")
+        plt.ylabel("Neutron Flux (1 / cm^2 - s)")
+        plt.show()
+
+        # Cross section collapsing
+        # sigma_a = np.sum(flux1) * xsDict["U"]
+
+
+
 
 
 
