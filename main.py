@@ -130,6 +130,9 @@ def main(inputFile):
             if cellLeftBound(ind) < pos < cellRightBound(ind):
                 return ind
     
+    # Find and store positions of fuel and water cells
+    waterCells = np.where(np.array(geom) == "W")[0]
+
     nonWaterCells = np.where(np.array(geom) != "W")[0]
     nonControlCells = np.where(np.array(geom) != "C")[0]
 
@@ -542,6 +545,7 @@ def main(inputFile):
         plt.show()
     
     if runFD:
+        startTime = time.time()
         N = len(geom)
 
         # Create array for d values
@@ -657,6 +661,10 @@ def main(inputFile):
             k = k_new
 
             print(k)
+        
+        endTime = time.time()
+
+        print(f"{endTime - startTime:.3f} seconds for FD")
 
         # Apply power condition
         sumFuelFlux1Assem1 = np.sum(flux1[fuelCells[0:int(len(fuelCells)/2)]])
@@ -695,9 +703,43 @@ def main(inputFile):
             edgeCurrents2.append(0)
         
         # Calculate center currents
+        centerCurrents1 = []
+        centerCurrents2 = []
+        for i in range(len(edgeCurrents1)-1):
+            centerCurrents1.append((edgeCurrents1[i] + edgeCurrents1[i+1])/2)
+            centerCurrents2.append((edgeCurrents2[i] + edgeCurrents2[i+1])/2)
 
-        
-        
+        # Cross section homogenization
+        fuelAvgFlux1 = np.average(flux1[fuelCells[:]])
+        fuelAvgFlux2 = np.average(flux2[fuelCells[:]])
+        waterAvgFlux1 = np.average(flux1[waterCells[:]])
+        waterAvgFlux2 = np.average(flux2[waterCells[:]])
+
+        collapsedTr1 = (fuelAvgFlux1 * xsDict[geom[fuelCells[0]]]["Sigma_tr1"] + waterAvgFlux1 * xsDict[geom[fuelCells[-1]]]["Sigma_tr1"]) / (fuelAvgFlux1 + waterAvgFlux1)
+        collapsedTr2 = (fuelAvgFlux2 * xsDict[geom[fuelCells[0]]]["Sigma_tr2"] + waterAvgFlux2 * xsDict[geom[fuelCells[-1]]]["Sigma_tr2"]) / (fuelAvgFlux2 + waterAvgFlux2)
+        collapsedA1 = (fuelAvgFlux1 * xsDict[geom[fuelCells[0]]]["Sigma_a1"] + waterAvgFlux1 * xsDict[geom[fuelCells[-1]]]["Sigma_a1"]) / (fuelAvgFlux1 + waterAvgFlux1)
+        collapsedA2 = (fuelAvgFlux2 * xsDict[geom[fuelCells[0]]]["Sigma_a2"] + waterAvgFlux2 * xsDict[geom[fuelCells[-1]]]["Sigma_a2"]) / (fuelAvgFlux2 + waterAvgFlux2)
+        collapsedS11 = (fuelAvgFlux1 * xsDict[geom[fuelCells[0]]]["Sigma_s11"] + waterAvgFlux1 * xsDict[geom[fuelCells[-1]]]["Sigma_s11"]) / (fuelAvgFlux1 + waterAvgFlux1)
+        collapsedS12 = (fuelAvgFlux1 * xsDict[geom[fuelCells[0]]]["Sigma_s12"] + waterAvgFlux1 * xsDict[geom[fuelCells[-1]]]["Sigma_s12"]) / (fuelAvgFlux1 + waterAvgFlux1)
+        collapsedS21 = (fuelAvgFlux2 * xsDict[geom[fuelCells[0]]]["Sigma_s21"] + waterAvgFlux2 * xsDict[geom[fuelCells[-1]]]["Sigma_s21"]) / (fuelAvgFlux2 + waterAvgFlux2)
+        collapsedS22 = (fuelAvgFlux2 * xsDict[geom[fuelCells[0]]]["Sigma_s22"] + waterAvgFlux2 * xsDict[geom[fuelCells[-1]]]["Sigma_s22"]) / (fuelAvgFlux2 + waterAvgFlux2)
+        collapsedF1 = (fuelAvgFlux1 * xsDict[geom[fuelCells[0]]]["Sigma_f1"] + waterAvgFlux1 * xsDict[geom[fuelCells[-1]]]["Sigma_f1"]) / (fuelAvgFlux1 + waterAvgFlux1)
+        collapsedF2 = (fuelAvgFlux2 * xsDict[geom[fuelCells[0]]]["Sigma_f2"] + waterAvgFlux2 * xsDict[geom[fuelCells[-1]]]["Sigma_f2"]) / (fuelAvgFlux2 + waterAvgFlux2)
+
+        # Cross section collapsing
+        averageFlux1 = np.average(flux1)
+        averageFlux2 = np.average(flux2)
+
+        collapsedTr = (collapsedTr1 * averageFlux1 + collapsedTr2 * averageFlux2) / (averageFlux1 + averageFlux2)
+        collapsedA = (collapsedA1 * averageFlux1 + collapsedA2 * averageFlux2) / (averageFlux2 + averageFlux1)
+        collapsedS = ((collapsedS11 + collapsedS12) * averageFlux1 + (collapsedS21 + collapsedS22) * averageFlux2) / (averageFlux1 + averageFlux2)
+        collapsedF = (collapsedF1 * averageFlux1 + collapsedF2 * averageFlux2) / (averageFlux1 + averageFlux2)
+
+        print(f"FD collapsed transport:{collapsedTr:.5f}")
+        print(f"FD collapsed absorption:{collapsedA:.5f}")
+        print(f"FD collapsed scattering:{collapsedS:.5f}")
+        print(f"FD collapsed fission:{collapsedF:.5f}")
+
         plt.figure(figsize=(23,10)) 
         plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(flux1)+1), color="g", alpha=0.3) # Fuel boundaries
         plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(flux1)+1), color="k", alpha=0.4) # Problem bounds
@@ -724,8 +766,19 @@ def main(inputFile):
         plt.ylabel("Neutron Flux (1 / cm^2 - s)")
         plt.show()
 
-        # Cross section collapsing
-        # sigma_a = np.sum(flux1) * xsDict["U"]
+        plt.figure(figsize=(23,10)) 
+        plt.errorbar(x=fuelBounds, y=np.zeros(len(fuelBounds)), linestyle='', yerr=(np.max(centerCurrents1)*1.2), color="g", alpha=0.3) # Fuel boundaries
+        plt.errorbar(x=[0,L_geom], y=np.zeros(2), linestyle='', yerr=(np.max(centerCurrents1)*1.2), color="k", alpha=0.4) # Problem bounds
+        plt.plot(cellCenters, centerCurrents1, label="Group 1 Current")
+        plt.scatter(cellCenters, centerCurrents1, c="b",s=0.5)
+        plt.plot(cellCenters, centerCurrents2, label="Group 2 Current")
+        plt.scatter(cellCenters, centerCurrents2, c="orange",s=0.5)
+        # plt.errorbar(starts, np.zeros(len(starts)), linestyle="",xerr=0,yerr=0.01, c="r", label="Start Positions")
+        plt.legend()
+        plt.ylim(np.min(centerCurrents1)*1.2, np.max(centerCurrents1)*1.2)
+        plt.xlabel("Position (cm)")
+        plt.ylabel("Neutron Current")
+        plt.show()
 
 
 
